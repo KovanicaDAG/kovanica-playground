@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/*]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
+
+    steps:
+      - name: Checkout playground
+        uses: actions/checkout@v4
+        with:
+          path: kovanica-playground
+
+      - name: Checkout SDK dependency
+        uses: actions/checkout@v4
+        with:
+          repository: KovanicaDAG/kovanica-sdk
+          path: kovanica-sdk
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Build SDK
+        run: |
+          cd kovanica-sdk
+          if [ ! -f package.json ]; then
+            git fetch origin feat/sdk-bootstrap
+            git checkout feat/sdk-bootstrap
+          fi
+          npm ci
+          npm run build
+
+      - name: Install playground dependencies
+        run: |
+          cd kovanica-playground
+          npm ci
+
+      - name: Typecheck
+        run: |
+          cd kovanica-playground
+          npm run typecheck
+
+      - name: Lint
+        run: |
+          cd kovanica-playground
+          npm run lint
+
+      - name: Run Tests
+        run: |
+          cd kovanica-playground
+          npm test
+
+      - name: Build Playground
+        run: |
+          cd kovanica-playground
+          npm run build
