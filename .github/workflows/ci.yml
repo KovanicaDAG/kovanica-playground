@@ -33,6 +33,10 @@ jobs:
       - name: Build SDK
         run: |
           cd kovanica-sdk
+          if [ ! -f package.json ]; then
+            git fetch origin feat/sdk-bootstrap
+            git checkout feat/sdk-bootstrap
+          fi
           npm ci
           npm run build
 
