@@ -11,7 +11,7 @@ describe("Immutable SDK Pin & Traceability", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     const pinnedSha = pkg?.kovanicaSdk?.testedRevision;
 
-    expect(pinnedSha).toBe("8e52f03b1593a4d856b0bcbbb21e0109f00e4653");
+    expect(pinnedSha).toBe("b36d63b04af9483cce96647071f1e3de8c143231");
     expect(pinnedSha).toMatch(/^[0-9a-f]{40}$/);
 
     const ciWorkflow = fs.readFileSync(path.join(rootDir, ".github/workflows/ci.yml"), "utf8");
@@ -34,6 +34,10 @@ describe("Immutable SDK Pin & Traceability", () => {
       const resolvedSha = execSync(`git -C "${installedSdkDir}" rev-parse HEAD`, { encoding: "utf8" }).trim();
       expect(resolvedSha).toBe(pinnedSha);
     }
+
+    // Prove which SDK source the tests and runtime actually resolve
+    const resolvedPath = path.resolve(rootDir, "node_modules", "kovanica-sdk", "dist", "index.js");
+    expect(fs.realpathSync(distIndexPath)).toBe(fs.realpathSync(resolvedPath));
   });
 });
 

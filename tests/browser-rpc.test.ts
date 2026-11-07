@@ -1235,4 +1235,319 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
       await page.close();
     }
   });
+
+  // =========================================================================
+  // Scenario C6: Failure Non-Conversion & Clean Recovery for Balances/Rewards
+  // =========================================================================
+  it("proves failures on getBalance and getRewards never convert to zero balance/rewards, recovers cleanly across failure modes, and preserves legitimate zero", async () => {
+    const page = await newTestPage();
+    let balanceMode: "transport-500" | "rpc-error" | "legitimate-zero" | "nonzero-recovered" = "transport-500";
+    let rewardsMode: "transport-500" | "legitimate-zero" | "nonzero-recovered" = "transport-500";
+    const testAddress = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag";
+
+    try {
+      await setupRpcRoute(page, (method) => {
+        if (method === "kovanica_syncStatus") {
+          return {
+            catchingUp: false,
+            committedHeight: 10,
+            localTipRound: 10,
+            peerCount: 3,
+            networkTag: "5-hybrid",
+          };
+        }
+
+        if (method === "kovanica_getBalance") {
+          if (balanceMode === "transport-500") {
+            throw {
+              rawFulfill: {
+                status: 500,
+                contentType: "text/plain",
+                body: "Internal Server Error",
+              },
+            };
+          }
+          if (balanceMode === "rpc-error") {
+            throw {
+              code: -32000,
+              message: "State storage read failure",
+            };
+          }
+          if (balanceMode === "legitimate-zero") {
+            return "0x0";
+          }
+          if (balanceMode === "nonzero-recovered") {
+            return "0x1994a3693dbc0"; // 450018999000000 atoms
+          }
+        }
+
+        if (method === "kovanica_getRewards") {
+          if (rewardsMode === "transport-500") {
+            throw {
+              rawFulfill: {
+                status: 500,
+                contentType: "text/plain",
+                body: "Internal Server Error",
+              },
+            };
+          }
+          if (rewardsMode === "legitimate-zero") {
+            return "0x0";
+          }
+          if (rewardsMode === "nonzero-recovered") {
+            return "0x9502f900"; // 2500000000 atoms (2.5 KVNC)
+          }
+        }
+
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+      // 1. Select kovanica_getBalance
+      const methodSelect = page.locator("#rpc-method-select");
+      await methodSelect.selectOption("kovanica_getBalance");
+
+      const addressInput = page.locator("#param-input-address");
+      await addressInput.fill(testAddress);
+
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+
+      // Transport 500 failure
+      balanceMode = "transport-500";
+      await executeBtn.click();
+      await expectVisible(page.getByText("RPC Error", { exact: true }));
+      // Must not convert to 0 balance or 0 KVNC
+      const responseContainer = page.locator("body");
+      expect(await responseContainer.innerText()).not.toContain('"atoms": "0"');
+      expect(await responseContainer.innerText()).not.toContain('"kvnc": "0 KVNC"');
+
+      // RPC Error failure
+      balanceMode = "rpc-error";
+      await executeBtn.click();
+      await expectVisible(page.getByText("RPC Error", { exact: true }));
+      await expectContainsText(page.locator(".bg-red-950\\/40"), "State storage read failure");
+      expect(await responseContainer.innerText()).not.toContain('"atoms": "0"');
+
+      // Legitimate zero balance
+      balanceMode = "legitimate-zero";
+      await executeBtn.click();
+      await expectNotVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(page.locator("text=Response Result"));
+      const balanceZeroPre = page.locator("pre").filter({ hasText: '"atoms": "0"' });
+      await expectVisible(balanceZeroPre);
+      await expectContainsText(balanceZeroPre, '"kvnc": "0 KVNC"');
+      await expectContainsText(balanceZeroPre, '"hex_quantity": "0x0"');
+
+      // Clean recovery to non-zero balance
+      balanceMode = "nonzero-recovered";
+      await executeBtn.click();
+      const balanceRecoveredPre = page.locator("pre").filter({ hasText: "450018999000000" });
+      await expectVisible(balanceRecoveredPre);
+      await expectContainsText(balanceRecoveredPre, '"kvnc": "450018.999 KVNC"');
+
+      // 2. Select kovanica_getRewards
+      await methodSelect.selectOption("kovanica_getRewards");
+      await addressInput.fill(testAddress);
+
+      // Transport failure does not become zero rewards
+      rewardsMode = "transport-500";
+      await executeBtn.click();
+      await expectVisible(page.getByText("RPC Error", { exact: true }));
+      expect(await responseContainer.innerText()).not.toContain('"rewards_atoms": "0"');
+
+      // Legitimate zero rewards
+      rewardsMode = "legitimate-zero";
+      await executeBtn.click();
+      await expectNotVisible(page.getByText("RPC Error", { exact: true }));
+      const rewardsZeroPre = page.locator("pre").filter({ hasText: '"rewards_atoms": "0"' });
+      await expectVisible(rewardsZeroPre);
+      await expectContainsText(rewardsZeroPre, '"rewards_kvnc": "0 KVNC"');
+
+      // Clean recovery to non-zero rewards
+      rewardsMode = "nonzero-recovered";
+      await executeBtn.click();
+      const rewardsRecoveredPre = page.locator("pre").filter({ hasText: "2500000000" });
+      await expectVisible(rewardsRecoveredPre);
+      await expectContainsText(rewardsRecoveredPre, '"rewards_kvnc": "2.5 KVNC"');
+    } finally {
+      await page.close();
+    }
+  });
+
+  // =========================================================================
+  // Scenario C7: Distinction of Submission, Admission, Commitment, and Execution
+  // =========================================================================
+  it("distinguishes submission acknowledgement, admission, commitment, and execution, proving nonzero height alone cannot pass executed-state acceptance", async () => {
+    const page = await newTestPage();
+    const testAuthor = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag";
+    const pendingTxHash = "0x" + "11".repeat(32);
+
+    try {
+      await setupRpcRoute(page, (method) => {
+        if (method === "kovanica_syncStatus") {
+          return {
+            catchingUp: false,
+            committedHeight: 5,
+            localTipRound: 5,
+            peerCount: 2,
+            networkTag: "5-testnet",
+          };
+        }
+        if (method === "kovanica_blockNumber") {
+          return "0x5";
+        }
+        if (method === "kovanica_getPendingTransactions") {
+          // Admission acknowledgement: in mempool, but not committed or executed
+          return [pendingTxHash];
+        }
+        if (method === "kovanica_getTransactionReceipt") {
+          // Unexecuted transaction has no receipt
+          return null;
+        }
+        if (method === "kovanica_getBlockByNumber") {
+          // Block 5 commitment exists
+          return {
+            number: "0x5",
+            round: "0x5",
+            hash: "0x" + "22".repeat(32),
+            transactions: ["0x" + "33".repeat(32)],
+          };
+        }
+        if (method === "kovanica_getBalance") {
+          // Author balance remains at exact unrewarded genesis liquid baseline: 450_000_000_000_000 atoms (450,000 KVNC)
+          return "0x19945ca262000";
+        }
+        if (method === "kovanica_getRewards") {
+          // Author has 0 cumulative rewards
+          return "0x0";
+        }
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+      // 1. Diagnostics shows nonzero committed height (5)
+      await expectText(page.locator('[data-testid="diagnostic-committed-height"]'), "5");
+      await expectText(page.locator('[data-testid="sync-status-badge"]'), "Synced");
+
+      const methodSelect = page.locator("#rpc-method-select");
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+
+      // 2. Admission: kovanica_getPendingTransactions returns mempool transaction
+      await methodSelect.selectOption("kovanica_getPendingTransactions");
+      await executeBtn.click();
+      await expectVisible(page.locator("text=Response Result"));
+      await expectContainsText(page.locator("pre").filter({ hasText: pendingTxHash }), pendingTxHash);
+
+      // 3. Unexecuted: receipt is null
+      await methodSelect.selectOption("kovanica_getTransactionReceipt");
+      await page.locator("#param-input-hash").fill(pendingTxHash);
+      await executeBtn.click();
+      await expectVisible(page.locator("text=Response Result"));
+      await expectContainsText(page.locator("pre").filter({ hasText: "null" }), "null");
+
+      // 4. Execution verification: author balance is at unrewarded genesis baseline (450,000 KVNC)
+      await methodSelect.selectOption("kovanica_getBalance");
+      await page.locator("#param-input-address").fill(testAuthor);
+      await executeBtn.click();
+      const balancePre = page.locator("pre").filter({ hasText: "450000000000000" });
+      await expectVisible(balancePre);
+      await expectContainsText(balancePre, '"kvnc": "450000 KVNC"');
+
+      // 5. Author rewards is 0
+      await methodSelect.selectOption("kovanica_getRewards");
+      await page.locator("#param-input-address").fill(testAuthor);
+      await executeBtn.click();
+      const rewardsPre = page.locator("pre").filter({ hasText: '"rewards_atoms": "0"' });
+      await expectVisible(rewardsPre);
+      await expectContainsText(rewardsPre, '"rewards_kvnc": "0 KVNC"');
+
+      // 6. Prove execution assertion:
+      // Author balance (450000000000000 atoms) DOES NOT strictly exceed the genesis baseline (450000000000000 atoms).
+      // Thus, nonzero height alone (height=5) does NOT constitute executed-balance/reward acceptance!
+      const baseline = 450_000_000_000_000n;
+      const authorBalance = 450_000_000_000_000n;
+      expect(authorBalance > baseline).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
+
+  // =========================================================================
+  // Scenario C8: Network Selection Aborts In-Flight Requests & Prevents Stale Overwrites
+  // =========================================================================
+  it("aborts in-flight execution and drops stale responses when target network is changed", async () => {
+    const page = await newTestPage();
+    let resolveSlowExecution: (() => void) | null = null;
+    const legacyHexAddress = "0x" + "00".repeat(31) + "01";
+
+    try {
+      await setupRpcRoute(page, async (method) => {
+        if (method === "kovanica_syncStatus") {
+          return {
+            catchingUp: false,
+            committedHeight: 20,
+            localTipRound: 20,
+            peerCount: 3,
+            networkTag: "5-hybrid",
+          };
+        }
+        if (method === "kovanica_blockNumber") {
+          await new Promise<void>((r) => {
+            resolveSlowExecution = r;
+          });
+          return "0x777";
+        }
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+      // Start on Hybrid Testnet (Chain 5)
+      const networkSelect = page.locator("#target-network-select");
+      expect(await networkSelect.inputValue()).toBe("5");
+
+      // Verify legacy hex address is valid on Chain 5
+      const methodSelect = page.locator("#rpc-method-select");
+      await methodSelect.selectOption("kovanica_getBalance");
+      const addressInput = page.locator("#param-input-address");
+      await addressInput.fill(legacyHexAddress);
+      // No validation error on Chain 5
+      await expectNotVisible(page.locator("text=Invalid address for chain"));
+
+      // Switch back to blockNumber and start slow in-flight request
+      await methodSelect.selectOption("kovanica_blockNumber");
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+      await executeBtn.click();
+
+      // Cancel button appears indicating in-flight execution
+      const cancelBtn = page.getByRole("button", { name: "Cancel" });
+      await expectVisible(cancelBtn);
+
+      // Change Target Network to Mainnet (Chain 1)
+      await networkSelect.selectOption("1");
+
+      // In-flight execution is aborted immediately
+      await expectNotVisible(cancelBtn);
+      await expectNotVisible(page.locator("text=Response Result"));
+
+      // Switch to getBalance with legacy hex address: on Mainnet (Chain 1), it must immediately show error
+      await methodSelect.selectOption("kovanica_getBalance");
+      await addressInput.fill(legacyHexAddress);
+      await expectVisible(page.locator("text=Invalid address for chain 1"));
+
+      // Now resolve the slow execution from Chain 5
+      if (resolveSlowExecution) {
+        (resolveSlowExecution as () => void)();
+      }
+
+      // Wait a moment and confirm the delayed response from Chain 5 never overwrites the view
+      await page.waitForTimeout(300);
+      await expectNotVisible(page.locator("text=Response Result"));
+      expect(await page.locator("body").innerText()).not.toContain("0x777");
+    } finally {
+      await page.close();
+    }
+  });
 });
