@@ -470,4 +470,249 @@ describe("Playground Node Diagnostics UI Regressions", () => {
     });
     expect(container.textContent).not.toContain("KUNA");
   });
+
+  // 13. Non-conversion of getBalance failure to zero balance & preservation of legitimate zero
+  it("proves transport or RPC failure on getBalance does not produce zero balance and legitimate zero is preserved", async () => {
+    let balanceResult: any = new Error("Transport connection reset");
+    const testAddress = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag";
+
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      if (body.method === "kovanica_syncStatus") {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { committedHeight: "10", localTipRound: "10", peerCount: 2, catchingUp: false },
+          }),
+        };
+      }
+      if (body.method === "kovanica_getBalance") {
+        if (balanceResult instanceof Error) {
+          throw balanceResult;
+        }
+        if (balanceResult?.rpcError) {
+          return {
+            ok: true,
+            text: async () => JSON.stringify({
+              jsonrpc: "2.0",
+              id: body.id,
+              error: balanceResult.rpcError,
+            }),
+          };
+        }
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: balanceResult,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }),
+      };
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-status-badge").textContent).toBe("Synced");
+    });
+
+    // Select kovanica_getBalance
+    fireEvent.change(screen.getByLabelText("RPC Method"), {
+      target: { value: "kovanica_getBalance" },
+    });
+
+    const addressInput = screen.getByLabelText(/Account Address/i);
+    fireEvent.change(addressInput, { target: { value: testAddress } });
+
+    // 1. Transport failure: click execute
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText("RPC Error")).toBeDefined();
+    });
+    // Must NOT display zero balance or zero KVNC
+    expect(screen.queryByText(/"atoms": "0"/)).toBeNull();
+    expect(screen.queryByText(/"kvnc": "0 KVNC"/)).toBeNull();
+
+    // 2. RPC Error response
+    balanceResult = { rpcError: { code: -32000, message: "State lookup failed" } };
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText(/State lookup failed/)).toBeDefined();
+    });
+    expect(screen.queryByText(/"atoms": "0"/)).toBeNull();
+
+    // 3. Legitimate zero balance: "0x0"
+    balanceResult = "0x0";
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Response Result/)).toBeDefined();
+    });
+    expect(screen.getByText(/"atoms": "0"/)).toBeDefined();
+    expect(screen.getByText(/"kvnc": "0 KVNC"/)).toBeDefined();
+    expect(screen.queryByText("RPC Error")).toBeNull();
+
+    // 4. Non-zero balance recovery: "0x1994a3693dbc0" (450018999000000 atoms)
+    balanceResult = "0x1994a3693dbc0";
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText(/"atoms": "450018999000000"/)).toBeDefined();
+    });
+    expect(screen.getByText(/"kvnc": "450018.999 KVNC"/)).toBeDefined();
+  });
+
+  // 14. Non-conversion of getRewards failure to zero rewards & preservation of legitimate zero
+  it("proves transport or RPC failure on getRewards does not produce zero rewards and legitimate zero is preserved", async () => {
+    let rewardsResult: any = new Error("Connection timed out");
+    const testAddress = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag";
+
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      if (body.method === "kovanica_syncStatus") {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { committedHeight: "10", localTipRound: "10", peerCount: 2, catchingUp: false },
+          }),
+        };
+      }
+      if (body.method === "kovanica_getRewards") {
+        if (rewardsResult instanceof Error) {
+          throw rewardsResult;
+        }
+        if (rewardsResult?.rpcError) {
+          return {
+            ok: true,
+            text: async () => JSON.stringify({
+              jsonrpc: "2.0",
+              id: body.id,
+              error: rewardsResult.rpcError,
+            }),
+          };
+        }
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: rewardsResult,
+          }),
+        };
+      }
+      return {
+        ok: true,
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }),
+      };
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-status-badge").textContent).toBe("Synced");
+    });
+
+    fireEvent.change(screen.getByLabelText("RPC Method"), {
+      target: { value: "kovanica_getRewards" },
+    });
+
+    const addressInput = screen.getByLabelText(/Account Address/i);
+    fireEvent.change(addressInput, { target: { value: testAddress } });
+
+    // 1. Failure does not become 0 rewards
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText("RPC Error")).toBeDefined();
+    });
+    expect(screen.queryByText(/"rewards_atoms": "0"/)).toBeNull();
+    expect(screen.queryByText(/"rewards_kvnc": "0 KVNC"/)).toBeNull();
+
+    // 2. Legitimate zero rewards
+    rewardsResult = "0x0";
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText(/Response Result/)).toBeDefined();
+    });
+    expect(screen.getByText(/"rewards_atoms": "0"/)).toBeDefined();
+    expect(screen.getByText(/"rewards_kvnc": "0 KVNC"/)).toBeDefined();
+
+    // 3. Clean recovery to nonzero rewards
+    rewardsResult = "0x9502f900"; // 2.5 KVNC
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    await waitFor(() => {
+      expect(screen.getByText(/"rewards_atoms": "2500000000"/)).toBeDefined();
+    });
+    expect(screen.getByText(/"rewards_kvnc": "2.5 KVNC"/)).toBeDefined();
+  });
+
+  // 15. Target network change aborts in-flight requests and prevents stale overwrite
+  it("aborts in-flight execution and drops stale responses when target network changes", async () => {
+    let slowResolve: (() => void) | null = null;
+
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      if (body.method === "kovanica_syncStatus") {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { committedHeight: "10", localTipRound: "10", peerCount: 2, catchingUp: false },
+          }),
+        };
+      }
+      if (body.method === "kovanica_blockNumber") {
+        await new Promise<void>((r) => {
+          slowResolve = r;
+        });
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: "0x999",
+          }),
+        };
+      }
+      return {
+        ok: true,
+        text: async () => JSON.stringify({ jsonrpc: "2.0", id: body.id, result: null }),
+      };
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-status-badge").textContent).toBe("Synced");
+    });
+
+    // Start slow execution on Hybrid Testnet (Chain 5)
+    fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
+
+    // Switch Target Network to Mainnet (Chain 1)
+    fireEvent.change(screen.getByLabelText("Target Network"), {
+      target: { value: "1" },
+    });
+
+    // In-flight execution cancelled immediately
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+
+    // Now resolve the slow request from the previous network
+    if (slowResolve) {
+      (slowResolve as () => void)();
+    }
+
+    // Wait and verify the stale response never lands
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(/Response Result/)).toBeNull();
+    expect(screen.queryByText("0x999")).toBeNull();
+  });
 });

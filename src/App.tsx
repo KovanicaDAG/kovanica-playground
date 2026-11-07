@@ -187,6 +187,32 @@ export default function App() {
     }
   }, [client, isTabVisible, rpcUrl]);
 
+  // Handle target network change: abort in-flight work, drop stale responses, and revalidate parameters
+  const handleNetworkChange = (newChainId: number) => {
+    if (activeAbortController.current) {
+      activeAbortController.current.abort();
+      activeAbortController.current = null;
+      setIsLoading(false);
+    }
+    execSequenceRef.current++;
+
+    setExecutionError(null);
+    setResponsePayload(null);
+    setElapsedMs(null);
+    setSelectedChainId(newChainId);
+
+    // Revalidate existing params against newly selected chain
+    const errors: Record<string, string> = {};
+    for (const p of currentMethod.params) {
+      const val = paramValues[p.name];
+      const check = validateParam(p, val, newChainId);
+      if (!check.valid) {
+        errors[p.name] = check.error || "Invalid";
+      }
+    }
+    setParamErrors(errors);
+  };
+
   // Handle explicit endpoint change: clear stale diagnostics immediately and cancel in-flight work
   const handleEndpointChange = (newUrl: string) => {
     // Abort in-flight probe
@@ -226,10 +252,12 @@ export default function App() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       const visible = document.visibilityState === "visible";
-      setIsTabVisible(visible);
-      if (visible) {
-        probeNode();
-      }
+      setIsTabVisible((prev) => {
+        if (!prev && visible) {
+          probeNode();
+        }
+        return visible;
+      });
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -473,7 +501,7 @@ export default function App() {
                 id="target-network-select"
                 aria-label="Target Network"
                 value={selectedChainId}
-                onChange={(e) => setSelectedChainId(Number(e.target.value))}
+                onChange={(e) => handleNetworkChange(Number(e.target.value))}
                 className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-gold"
               >
                 <option value={CHAIN_IDS.MAINNET}>Mainnet (Chain 1)</option>
