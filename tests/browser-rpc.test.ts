@@ -468,6 +468,304 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
   });
 
   // =========================================================================
+  // Scenario B7: SDK #4 Invalid Envelopes, Mismatched Response ID & Recovery
+  // =========================================================================
+  it("rejects invalid JSON-RPC 2.0 envelopes and mismatched response IDs, then recovers on next valid request", async () => {
+    const page = await newTestPage();
+    type EnvelopeMode =
+      | "non-object"
+      | "bad-version"
+      | "neither-result-nor-error"
+      | "both-result-and-error"
+      | "id-mismatch"
+      | "valid";
+    let diagMode: EnvelopeMode = "non-object";
+    let methodMode: EnvelopeMode = "id-mismatch";
+
+    try {
+      await setupRpcRoute(page, (method, _params, id) => {
+        const currentMode = method === "kovanica_syncStatus" ? diagMode : methodMode;
+
+        if (currentMode === "non-object") {
+          throw {
+            rawFulfill: {
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify([1, 2, 3]),
+            },
+          };
+        }
+        if (currentMode === "bad-version") {
+          throw {
+            rawFulfill: {
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify({ jsonrpc: "1.0", id, result: "0x1" }),
+            },
+          };
+        }
+        if (currentMode === "neither-result-nor-error") {
+          throw {
+            rawFulfill: {
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify({ jsonrpc: "2.0", id }),
+            },
+          };
+        }
+        if (currentMode === "both-result-and-error") {
+          throw {
+            rawFulfill: {
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id,
+                result: "0x1",
+                error: { code: -32000, message: "Ambiguous envelope" },
+              }),
+            },
+          };
+        }
+        if (currentMode === "id-mismatch") {
+          throw {
+            rawFulfill: {
+              status: 200,
+              contentType: "application/json",
+              body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 999999,
+                result: {
+                  catchingUp: false,
+                  committedHeight: 777,
+                  localTipRound: 777,
+                  peerCount: 4,
+                },
+              }),
+            },
+          };
+        }
+
+        if (method === "kovanica_syncStatus") {
+          return {
+            catchingUp: false,
+            committedHeight: 777,
+            localTipRound: 777,
+            peerCount: 4,
+            networkTag: "4-recovered",
+          };
+        }
+        if (method === "kovanica_blockNumber") {
+          return "0x309"; // 777
+        }
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+      // 1. Non-object envelope rejected
+      await expectText(page.locator('[data-testid="sync-status-badge"]'), "Connection Error");
+      await expectContainsText(
+        page.locator('[data-testid="diagnostic-empty-state"]'),
+        "payload must be a JSON object",
+      );
+
+      // 2. Bad jsonrpc version rejected
+      diagMode = "bad-version";
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expectContainsText(
+        page.locator('[data-testid="diagnostic-empty-state"]'),
+        'missing or invalid "jsonrpc" version',
+      );
+
+      // 3. Neither result nor error member rejected
+      diagMode = "neither-result-nor-error";
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expectContainsText(
+        page.locator('[data-testid="diagnostic-empty-state"]'),
+        "neither result nor error member present",
+      );
+
+      // 4. Both result and error members rejected
+      diagMode = "both-result-and-error";
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expectContainsText(
+        page.locator('[data-testid="diagnostic-empty-state"]'),
+        "both result and error members present",
+      );
+
+      // 5. Mismatched response ID rejected on diagnostics
+      diagMode = "id-mismatch";
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expectContainsText(
+        page.locator('[data-testid="diagnostic-empty-state"]'),
+        "JSON-RPC response ID mismatch",
+      );
+
+      // 6. Recovery on next valid diagnostics request
+      diagMode = "valid";
+      await page.getByRole("button", { name: "Refresh" }).click();
+      await expectText(page.locator('[data-testid="sync-status-badge"]'), "Synced");
+      await expectText(page.locator('[data-testid="header-node-status"]'), "Online (Synced)");
+      await expectText(page.locator('[data-testid="diagnostic-committed-height"]'), "777");
+
+      // 7. Method Explorer: Mismatched response ID rejected, then recovers on next valid call
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+      await executeBtn.click();
+      await expectVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(page.locator("text=JSON-RPC response ID mismatch"));
+
+      methodMode = "valid";
+      await executeBtn.click();
+      await expectNotVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(page.locator("text=Response Result"));
+      await expectContainsText(page.locator("pre").filter({ hasText: "777" }), "777");
+    } finally {
+      await page.close();
+    }
+  });
+
+  // =========================================================================
+  // Scenario B8: SDK Timeout & Recovery in Real Browser
+  // =========================================================================
+  it("surfaces timeout error through real SDK client and recovers on subsequent valid request", async () => {
+    const page = await newTestPage();
+    let shouldTimeout = true;
+
+    try {
+      await setupRpcRoute(page, async (method, _params, _id, route) => {
+        if (method === "kovanica_syncStatus") {
+          return { catchingUp: false, committedHeight: 50, localTipRound: 50, peerCount: 3 };
+        }
+        if (method === "kovanica_blockNumber") {
+          if (shouldTimeout) {
+            // Wait until the request is aborted by the SDK timeout controller
+            await new Promise<void>((resolve) => {
+              route.request().failure();
+              setTimeout(resolve, 250);
+            });
+            try {
+              await route.abort("timedout");
+            } catch {
+              // already aborted
+            }
+            return;
+          }
+          return "0x58"; // 88
+        }
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+      await expectText(page.locator('[data-testid="diagnostic-committed-height"]'), "50");
+
+      // Shorten the 10_000ms SDK request timeout timer in the browser window to 40ms
+      // so HttpTransport's real timeout path fires rapidly and deterministically
+      await page.evaluate(() => {
+        const origSetTimeout = window.setTimeout.bind(window);
+        (window as any).setTimeout = ((fn: any, ms?: number, ...args: any[]) => {
+          const effectiveMs = typeof ms === "number" && ms >= 3000 && ms <= 10000 ? 40 : ms;
+          return origSetTimeout(fn, effectiveMs, ...args);
+        }) as typeof window.setTimeout;
+      });
+
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+      await executeBtn.click();
+
+      await expectVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(page.locator("text=Request timed out after 10000ms"));
+
+      // Next valid request must recover cleanly
+      shouldTimeout = false;
+      await executeBtn.click();
+      await expectNotVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(page.locator("text=Response Result"));
+      await expectContainsText(page.locator("pre").filter({ hasText: "88" }), "88");
+    } finally {
+      await page.close();
+    }
+  });
+
+  // =========================================================================
+  // Scenario B9: Currency Display Copy (KVNC, Never KUNA) & BigInt Error Data Safety
+  // =========================================================================
+  it("renders KVNC currency labels, zero and u64::MAX balances losslessly, and never crashes on bigint in RPC error data", async () => {
+    const page = await newTestPage();
+    let balanceAtomsHex = "0x0";
+    let throwBigIntErrorData = false;
+
+    try {
+      await setupRpcRoute(page, (method, _params, id) => {
+        if (method === "kovanica_syncStatus") {
+          return { catchingUp: false, committedHeight: 0, localTipRound: 0, peerCount: 0 };
+        }
+        if (method === "kovanica_getBalance") {
+          if (throwBigIntErrorData) {
+            throw {
+              rawFulfill: {
+                status: 200,
+                contentType: "application/json",
+                // Raw unquoted 18446744073709551615 in error.data is parsed as bigint by parseLosslessJson
+                body: `{"jsonrpc":"2.0","id":${JSON.stringify(id)},"error":{"code":-32000,"message":"Account state locked","data":{"lockedAtoms":18446744073709551615}}}`,
+              },
+            };
+          }
+          return balanceAtomsHex;
+        }
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+      // 1. Verify footer currency label explicitly states KVNC (9 decimals) and page has no stale KUNA copy
+      await expectText(
+        page.locator('[data-testid="footer-currency-label"]'),
+        "Kovanica Layer-1 Blockchain © 2026. KVNC (9 decimals).",
+      );
+      expect(await page.locator("body").textContent()).not.toContain("KUNA");
+
+      // 2. Select kovanica_getBalance and execute with 0 atoms on Hybrid Testnet (allows 0x address)
+      const methodSelect = page.locator("#rpc-method-select");
+      await methodSelect.selectOption("kovanica_getBalance");
+      const addressInput = page.locator("#param-input-address");
+      await addressInput.fill("0x" + "11".repeat(32));
+
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+      await executeBtn.click();
+
+      const zeroPre = page.locator("pre").filter({ hasText: "0 KVNC" });
+      await expectVisible(zeroPre);
+      await expectContainsText(zeroPre, '"atoms": "0"');
+      await expectContainsText(zeroPre, '"kvnc": "0 KVNC"');
+
+      // 3. Execute with u64::MAX (18446744073709551615 atoms = 18446744073.709551615 KVNC)
+      balanceAtomsHex = "0xffffffffffffffff";
+      await executeBtn.click();
+
+      const maxPre = page.locator("pre").filter({ hasText: "18446744073.709551615 KVNC" });
+      await expectVisible(maxPre);
+      await expectContainsText(maxPre, '"atoms": "18446744073709551615"');
+      await expectContainsText(maxPre, '"kvnc": "18446744073.709551615 KVNC"');
+      expect(await page.locator("body").textContent()).not.toContain("KUNA");
+
+      // 4. Trigger RPC error containing 64-bit bigint in error.data; confirm no BigInt serialization crash
+      throwBigIntErrorData = true;
+      await executeBtn.click();
+      await expectVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(page.locator("text=Account state locked"));
+      await expectVisible(page.locator("text=18446744073709551615"));
+
+      // 5. Recover on next valid call
+      throwBigIntErrorData = false;
+      await executeBtn.click();
+      await expectNotVisible(page.getByText("RPC Error", { exact: true }));
+      await expectVisible(maxPre);
+    } finally {
+      await page.close();
+    }
+  });
+
+  // =========================================================================
   // Scenario C1: State Race — Delay Endpoint A, Switch to B, Finish A
   // =========================================================================
   it("prevents delayed response from endpoint A overwriting newer endpoint B", async () => {
@@ -487,7 +785,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             headers: CORS_HEADERS,
             body: JSON.stringify({
               jsonrpc: "2.0",
-              id: 1,
+              id: _id,
               result: {
                 catchingUp: false,
                 committedHeight: 111,

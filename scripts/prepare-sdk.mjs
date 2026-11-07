@@ -60,7 +60,10 @@ if (!existsSync(join(PLAYGROUND_ROOT, "node_modules"))) {
 }
 
 // 3. If ../kovanica-sdk is at the exact pinned SHA and clean, ensure its dist/ is built
-if (siblingHead === PINNED_SDK_SHA && siblingClean) {
+const markerPath = join(INSTALLED_SDK_DIR, ".tested-revision");
+const installedIsSymlink = existsSync(INSTALLED_SDK_DIR) && lstatSync(INSTALLED_SDK_DIR).isSymbolicLink();
+
+if (siblingHead === PINNED_SDK_SHA && siblingClean && installedIsSymlink) {
   const siblingDist = join(SIBLING_SDK_DIR, "dist", "index.js");
   if (!existsSync(siblingDist)) {
     console.log(`[prepare-sdk] Building sibling SDK at pinned SHA ${PINNED_SDK_SHA}...`);
@@ -71,11 +74,9 @@ if (siblingHead === PINNED_SDK_SHA && siblingClean) {
   process.exit(0);
 }
 
-// 4. Otherwise, ../kovanica-sdk is on a different branch/commit (e.g. moving main or feature branch).
+// 4. Otherwise, ../kovanica-sdk is on a different branch/commit or dirty (e.g. moving main or feature branch).
 //    Do NOT mutate ../kovanica-sdk. Instead, materialize the exact pinned SHA in an isolated cache
 //    and populate node_modules/kovanica-sdk so consumption is strictly immutable.
-const markerPath = join(INSTALLED_SDK_DIR, ".tested-revision");
-const installedIsSymlink = existsSync(INSTALLED_SDK_DIR) && lstatSync(INSTALLED_SDK_DIR).isSymbolicLink();
 
 if (
   !installedIsSymlink &&

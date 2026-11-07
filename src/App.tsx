@@ -350,7 +350,9 @@ export default function App() {
       if (currentExecSeq !== execSequenceRef.current || controller.signal.aborted) return;
       const endTime = performance.now();
       setElapsedMs(Math.round(endTime - startTime));
-      setExecutionError(err?.message || String(err));
+      const baseMsg = err?.message || String(err);
+      const dataSuffix = err?.data !== undefined ? ` — data: ${formatJson(err.data)}` : "";
+      setExecutionError(`${baseMsg}${dataSuffix}`);
     } finally {
       if (currentExecSeq === execSequenceRef.current) {
         setIsLoading(false);
@@ -922,7 +924,7 @@ export default function App() {
       {/* Footer */}
       <footer className="border-t border-border mt-auto py-4 px-6 text-xs text-muted flex flex-wrap justify-between items-center gap-4 bg-surface">
         <div>
-          <span>Kovanica Layer-1 Blockchain &copy; 2026. KVNC (9 decimals).</span>
+          <span data-testid="footer-currency-label">Kovanica Layer-1 Blockchain &copy; 2026. KVNC (9 decimals).</span>
         </div>
         <div className="flex items-center gap-4">
           <span>Target Block: 4 s | GHOSTDAG K: 5</span>
