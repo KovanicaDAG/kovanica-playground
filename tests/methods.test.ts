@@ -1,6 +1,35 @@
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { CHAIN_IDS } from "kovanica-sdk";
 import { ALLOWLISTED_METHODS, validateParam } from "../src/methods";
+
+describe("Immutable SDK Pin & Traceability", () => {
+  it("pins an immutable 40-char SDK git commit SHA in package.json, CI workflow, and resolved installation", () => {
+    const rootDir = path.resolve(__dirname, "..");
+    const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
+    const pinnedSha = pkg?.kovanicaSdk?.testedRevision;
+
+    expect(pinnedSha).toBe("2c88aa782d2049b91248ab6716f74a0f6b94325e");
+    expect(pinnedSha).toMatch(/^[0-9a-f]{40}$/);
+
+    const ciWorkflow = fs.readFileSync(path.join(rootDir, ".github/workflows/ci.yml"), "utf8");
+    expect(ciWorkflow).toContain(`ref: ${pinnedSha}`);
+    expect(ciWorkflow).not.toMatch(/repository:\s*KovanicaDAG\/kovanica-sdk[\s\S]*?ref:\s*main/);
+
+    const installedSdkDir = path.join(rootDir, "node_modules", "kovanica-sdk");
+    expect(fs.existsSync(path.join(installedSdkDir, "dist", "index.js"))).toBe(true);
+
+    const markerPath = path.join(installedSdkDir, ".tested-revision");
+    if (fs.existsSync(markerPath)) {
+      expect(fs.readFileSync(markerPath, "utf8").trim()).toBe(pinnedSha);
+    } else {
+      const resolvedSha = execSync(`git -C "${installedSdkDir}" rev-parse HEAD`, { encoding: "utf8" }).trim();
+      expect(resolvedSha).toBe(pinnedSha);
+    }
+  });
+});
 
 describe("Playground Allowlisted Methods", () => {
   it("contains only read-only RPC methods", () => {

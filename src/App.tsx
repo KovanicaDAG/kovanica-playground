@@ -63,6 +63,7 @@ export default function App() {
   const activeAbortController = useRef<AbortController | null>(null);
   const activeProbeAbortController = useRef<AbortController | null>(null);
   const probeSequenceRef = useRef<number>(0);
+  const execSequenceRef = useRef<number>(0);
 
   // Selected method definition
   const currentMethod: MethodDefinition = useMemo(() => {
@@ -72,9 +73,12 @@ export default function App() {
     );
   }, [selectedMethodName]);
 
-  // Client instance
+  // Client instance: explicitly bind global fetch so browser Window context is preserved
   const client: KovanicaClient = useMemo(() => {
-    return new SdkClient(rpcUrl);
+    return new SdkClient({
+      url: rpcUrl,
+      fetch: (input, init) => globalThis.fetch(input, init),
+    });
   }, [rpcUrl]);
 
   // Distinct sync state computation
@@ -198,11 +202,25 @@ export default function App() {
     }
     // Invalidate sequence so delayed in-flight responses are dropped
     probeSequenceRef.current++;
+    execSequenceRef.current++;
 
     // Clear stale diagnostics immediately
     clearDiagnostics();
+    setExecutionError(null);
+    setResponsePayload(null);
+    setElapsedMs(null);
     setRpcUrl(newUrl);
   };
+
+  // Cleanup any in-flight probes or method calls on unmount
+  useEffect(() => {
+    return () => {
+      probeSequenceRef.current++;
+      execSequenceRef.current++;
+      activeProbeAbortController.current?.abort();
+      activeAbortController.current?.abort();
+    };
+  }, []);
 
   // Track tab visibility to prevent aggressive polling when hidden
   useEffect(() => {
@@ -245,6 +263,7 @@ export default function App() {
 
   // Reset param defaults and cancel running requests when method changes
   useEffect(() => {
+    execSequenceRef.current++;
     if (activeAbortController.current) {
       activeAbortController.current.abort();
       activeAbortController.current = null;
@@ -285,6 +304,7 @@ export default function App() {
     if (activeAbortController.current) {
       activeAbortController.current.abort();
     }
+    const currentExecSeq = ++execSequenceRef.current;
     const controller = new AbortController();
     activeAbortController.current = controller;
 
@@ -322,21 +342,26 @@ export default function App() {
         signal: controller.signal,
         timeoutMs: 10_000,
       });
+      if (currentExecSeq !== execSequenceRef.current || controller.signal.aborted) return;
       const endTime = performance.now();
       setElapsedMs(Math.round(endTime - startTime));
       setResponsePayload(formatJson(result));
     } catch (err: any) {
+      if (currentExecSeq !== execSequenceRef.current || controller.signal.aborted) return;
       const endTime = performance.now();
       setElapsedMs(Math.round(endTime - startTime));
       setExecutionError(err?.message || String(err));
     } finally {
-      setIsLoading(false);
-      activeAbortController.current = null;
+      if (currentExecSeq === execSequenceRef.current) {
+        setIsLoading(false);
+        activeAbortController.current = null;
+      }
     }
   };
 
   // Cancel currently running request
   const handleCancel = () => {
+    execSequenceRef.current++;
     if (activeAbortController.current) {
       activeAbortController.current.abort();
       activeAbortController.current = null;
