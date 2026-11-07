@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feat/*, fix/*]
+    branches: [main, feat/*, fix/*, test/*]
   pull_request:
     branches: [main]
 
@@ -42,6 +42,11 @@ jobs:
           cd kovanica-playground
           npm ci
 
+      - name: Install Playwright Chromium
+        run: |
+          cd kovanica-playground
+          npx playwright install --with-deps chromium
+
       - name: Typecheck
         run: |
           cd kovanica-playground
@@ -52,12 +57,17 @@ jobs:
           cd kovanica-playground
           npm run lint
 
-      - name: Run Tests
-        run: |
-          cd kovanica-playground
-          npm test
-
       - name: Build Playground
         run: |
           cd kovanica-playground
           npm run build
+
+      - name: Run Tests (Unit & Deterministic Browser Acceptance)
+        run: |
+          cd kovanica-playground
+          npm test
+
+      - name: Run Browser Acceptance Suite Explicitly
+        run: |
+          cd kovanica-playground
+          npm run test:browser

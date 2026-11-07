@@ -45,74 +45,83 @@ Kovanica Playground reflects the established Kovanica design system:
 
 ---
 
-## Tested SDK Revision
+## Tested SDK Revision & Immutable Resolution
 
-`kovanica-playground` consumes `kovanica-sdk` at tested and verified revision [`2c88aa782d2049b91248ab6716f74a0f6b94325e`](https://github.com/KovanicaDAG/kovanica-sdk/commit/2c88aa782d2049b91248ab6716f74a0f6b94325e).
+`kovanica-playground` consumes `kovanica-sdk` at the pinned, immutable git revision [`2c88aa782d2049b91248ab6716f74a0f6b94325e`](https://github.com/KovanicaDAG/kovanica-sdk/commit/2c88aa782d2049b91248ab6716f74a0f6b94325e):
+
+- **Manifest Metadata (`package.json`):** Recorded in `kovanicaSdk.testedRevision` (`2c88aa782d2049b91248ab6716f74a0f6b94325e`) and linked via `"kovanica-sdk": "file:../kovanica-sdk"` in `package.json` and `package-lock.json`.
+- **Automated Verification (`scripts/prepare-sdk.mjs`):** Running `npm run prepare:sdk` (also invoked automatically during `npm run build`) verifies that `../kovanica-sdk` exists, is checked out at the exact pinned 40-character SHA `2c88aa782d2049b91248ab6716f74a0f6b94325e` (never following a moving `main`), and has compiled `dist/index.js`.
+- **CI Enforcement (`.github/workflows/ci.yml` & `tests/methods.test.ts`):** GitHub Actions explicitly checks out `KovanicaDAG/kovanica-sdk` at `ref: 2c88aa782d2049b91248ab6716f74a0f6b94325e`, and unit tests assert that `package.json`, `.github/workflows/ci.yml`, and the resolved `../kovanica-sdk` `HEAD` match this SHA.
 
 ---
 
 ## Local Integration & Build Workflow
 
-### 1. Build the SDK at the Tested Revision
-
 ```bash
-cd ../kovanica-sdk
-git checkout 2c88aa782d2049b91248ab6716f74a0f6b94325e
-npm install
-npm run build
-```
+# 1. Verify/clone and build ../kovanica-sdk at pinned SHA 2c88aa782d2049b91248ab6716f74a0f6b94325e
+npm run prepare:sdk
 
-### 2. Install Dependencies & Build Playground
+# 2. Install playground dependencies cleanly from lockfile
+npm ci
 
-From the `kovanica-playground` root:
+# 3. Install headless Chromium for browser acceptance tests
+npx playwright install chromium
 
-```bash
-# Install dependencies (links to adjacent ../kovanica-sdk)
-npm install
-
-# Run type check
+# 4. Run typecheck, lint, production build, and test suites
 npm run typecheck
-
-# Run linter
 npm run lint
-
-# Run unit and UI regression tests
-npm test
-
-# Build production bundle
 npm run build
-
-# Start local development server
-npm run dev
+npm test
+npm run test:browser
 ```
 
 ---
 
-## Testing & Live RPC Verification Modes
+## Testing & Verification Modes (Offline, Browser Fixtures, Optional Live, Required Live)
 
-The test suite supports two explicit modes for live RPC verification:
+Verification is separated into four explicit, non-conflated layers:
 
-1. **Default / Offline Mode (`npm test`):**
-   - Offline unit tests, allowlist assertions, and rendered UI regressions run and assert deterministically against isolated fixtures.
-   - When live node prerequisites are unavailable, live integration tests produce a **real test skip** (`[skipped]`), separately reported from passing assertions rather than counting as passed.
+1. **Deterministic Offline Unit & Browser Fixture Tests (`npm test` / `npm run test:browser`):**
+   - `tests/methods.test.ts`, `tests/diagnostics-ui.test.tsx`, `tests/live-readiness-modes.test.ts`: SDK pin verification, allowlist checks, and JSDOM regressions.
+   - `tests/browser-rpc.test.ts`: Serves the production `dist/` bundle over an ephemeral local HTTP server and drives real Headless Chromium via Playwright with deterministic JSON-RPC route fixtures covering:
+     - Genesis / zero-peer state (`0` preserved, badge `Unknown`, availability is not sync)
+     - Populated state and lossless `u64::MAX` (`18446744073709551615`) rendering
+     - Unknown / missing fields (`—` and `Unknown`, never coerced to `0` or `No`)
+     - Nonzero reported `committedHeight` with `0` peers (`Unknown` sync state; reported height is not treated as executed-state evidence)
+     - Actively catching-up state (`Catching Up`, `Active`, `behindBy` rounds)
+     - Malformed HTTP 200 payloads, JSON-RPC errors, unsupported methods (`-32601`), and unreachable endpoints (honest failure banner without claiming CORS without evidence)
+     - Endpoint switch race conditions (delayed Endpoint A cannot overwrite newer Endpoint B), overlapping refreshes, late errors after newer successes, in-flight cancellation, and method-switch abort cleanup
+     - Hidden-tab polling pause and visible-tab resume without multiplying intervals
+     - Keyboard navigation (`Tab` / `Enter`)
 
-2. **Required-Live Mode (`npm run test:live:required` or `KOVANICA_REQUIRE_LIVE=1 npm test`):**
-   - Enforces live verification against a configured endpoint (`KOVANICA_RPC_URL` or `LIVE_RPC_URL`, defaulting to `http://127.0.0.1:8545/rpc`).
-   - Verifies genuine JSON-RPC 2.0 readiness (HTTP 200 alone is insufficient; invalid payloads, non-JSON HTML, or RPC error objects produce a non-zero failure exit).
-   - Separates verification into two distinct scenarios:
-     - **Basic Read-Only Interoperability:** Verifies canonical RPC queries (`kovanica_syncStatus`, `kovanica_blockNumber`) across any valid node, accommodating legitimate genesis and 0-peer unsynced states.
-     - **Stronger Synced Acceptance:** Enforces strict advanced node conditions (`committedHeight > 0n`, active `peerCount > 0`, `catchingUp === false`, and `isNodeSynced(status) === true`).
+2. **Default / Optional Live Mode (`npm run test:live` / `npm run test:browser:live`):**
+   - Connects to `KOVANICA_RPC_URL` (or `LIVE_RPC_URL`, defaulting to `http://127.0.0.1:8545/rpc`).
+   - When the live node prerequisite is unavailable, produces a **genuine test skip** (`[skipped]`), separately reported from passing assertions.
+
+3. **Required-Live Mode (`npm run test:live:required` / `npm run test:browser:live:required`):**
+   - Enforces live verification (`KOVANICA_REQUIRE_LIVE=1`).
+   - Verifies genuine JSON-RPC 2.0 readiness (HTTP 200 alone is insufficient; unreachable endpoints, invalid HTML/JSON payloads, or RPC error objects produce a non-zero exit code).
+   - Separates **Basic Read-Only Interoperability** (works on valid genesis / 0-peer nodes) from **Stronger Synced Acceptance** (`committedHeight > 0n`, `peerCount > 0`, `catchingUp === false`, `isNodeSynced(status) === true`).
 
 ```bash
-# Run all offline and UI tests (skips live verification if node is unavailable)
+# Run deterministic unit + headless Chromium browser fixture tests
 npm test
+npm run test:browser
 
-# Run live RPC verification against an isolated node
+# Run optional live RPC & live browser verification (skips if node is unavailable)
 npm run test:live
+npm run test:browser:live
 
-# Enforce required-live verification (fails with non-zero exit if unavailable)
+# Enforce required-live verification (fails with non-zero exit if unavailable or unsynced)
 npm run test:live:required
+npm run test:browser:live:required
 ```
+
+---
+
+## Chain-ID Inventory
+
+See [`docs/chain-id-inventory.md`](docs/chain-id-inventory.md) for the complete inventory of chain-ID assumptions across `kovanica-playground` and `kovanica-sdk`, including why L1 `hybrid5` (Chain 5) is not equivalent to `chain2` (Chain 2).
 
 ---
 

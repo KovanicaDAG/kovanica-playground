@@ -8,14 +8,18 @@
     "testedRevision": "2c88aa782d2049b91248ab6716f74a0f6b94325e"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "prepare:sdk": "node scripts/prepare-sdk.mjs",
+    "dev": "node scripts/prepare-sdk.mjs && vite",
+    "build": "node scripts/prepare-sdk.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit",
-    "test": "vitest run",
-    "test:live": "vitest run tests/live-node.test.ts",
-    "test:live:required": "KOVANICA_REQUIRE_LIVE=1 vitest run tests/live-node.test.ts"
+    "typecheck": "node scripts/prepare-sdk.mjs && tsc --noEmit",
+    "lint": "node scripts/prepare-sdk.mjs && tsc --noEmit",
+    "test": "node scripts/prepare-sdk.mjs && vitest run",
+    "test:browser": "node scripts/prepare-sdk.mjs && vitest run tests/browser-rpc.test.ts",
+    "test:browser:live": "node scripts/prepare-sdk.mjs && vitest run tests/browser-live.test.ts",
+    "test:browser:live:required": "node scripts/prepare-sdk.mjs && KOVANICA_REQUIRE_LIVE=1 vitest run tests/browser-live.test.ts",
+    "test:live": "node scripts/prepare-sdk.mjs && vitest run tests/live-node.test.ts",
+    "test:live:required": "node scripts/prepare-sdk.mjs && KOVANICA_REQUIRE_LIVE=1 vitest run tests/live-node.test.ts"
   },
   "dependencies": {
     "kovanica-sdk": "file:../kovanica-sdk",
@@ -24,11 +28,13 @@
   },
   "devDependencies": {
     "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "jsdom": "^25.0.1",
+    "playwright": "~1.61.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
     "typescript": "^5.7.2",
