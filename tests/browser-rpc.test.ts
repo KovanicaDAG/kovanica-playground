@@ -766,6 +766,103 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
   });
 
   // =========================================================================
+  // Scenario B10: Deterministic Stronger Nonzero Acceptance in Browser
+  // =========================================================================
+  it("verifies stronger nonzero acceptance in browser: height, tip round, truthful sync/peer diagnostics, executed balance and rewards with lossless KVNC copy", async () => {
+    const page = await newTestPage();
+    try {
+      await setupRpcRoute(page, (method) => {
+        if (method === "kovanica_syncStatus") {
+          return {
+            catchingUp: false,
+            committedHeight: 8,
+            localTipRound: 9,
+            peerCount: 3,
+            network: "hybrid-testnet-5",
+          };
+        }
+        if (method === "kovanica_miningInfo") {
+          return {
+            activeMining: false,
+            blockIntervalSeconds: 4,
+            currentRound: 9,
+            miningTarget: "0x0000ffff00000000000000000000000000000000000000000000000000000000",
+            rewardPerBlockAtoms: 2500000000,
+          };
+        }
+        if (method === "kovanica_blockNumber") {
+          return "0x8";
+        }
+        if (method === "kovanica_getBalance") {
+          // 450018999000000 atoms = 450018.999 KVNC
+          return "0x1994a3693dbc0";
+        }
+        if (method === "kovanica_getRewards") {
+          // 2500000000 atoms = 2.5 KVNC
+          return "0x9502f900";
+        }
+        throw { code: -32601, message: "Method not found" };
+      });
+
+      await page.goto(server.url, { waitUntil: "domcontentloaded" });
+
+      // 1. Diagnostics panel: truthful sync status and nonzero metrics
+      const badge = page.locator('[data-testid="sync-status-badge"]');
+      await expectText(badge, "Synced");
+
+      const headerStatus = page.locator('[data-testid="header-node-status"]');
+      await expectText(headerStatus, "Online (Synced)");
+
+      const committedHeight = page.locator('[data-testid="diagnostic-committed-height"]');
+      await expectText(committedHeight, "8");
+
+      const tipRound = page.locator('[data-testid="diagnostic-tip-round"]');
+      await expectText(tipRound, "9");
+
+      const peerCount = page.locator('[data-testid="diagnostic-peer-count"]');
+      await expectText(peerCount, "3");
+
+      const catchingUp = page.locator('[data-testid="diagnostic-catching-up"]');
+      await expectText(catchingUp, "No");
+
+      // 2. Executed balance call via Method Explorer
+      const methodSelect = page.locator("#rpc-method-select");
+      await methodSelect.selectOption("kovanica_getBalance");
+
+      const addressInput = page.locator("#param-input-address");
+      const testAddress = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag";
+      await addressInput.fill(testAddress);
+
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+      await executeBtn.click();
+
+      const balancePre = page.locator("pre").filter({ hasText: "450018.999 KVNC" });
+      await expectVisible(balancePre);
+      await expectContainsText(balancePre, '"atoms": "450018999000000"');
+      await expectContainsText(balancePre, '"kvnc": "450018.999 KVNC"');
+      await expectContainsText(balancePre, '"hex_quantity": "0x1994a3693dbc0"');
+
+      // 3. Executed rewards call via Method Explorer
+      await methodSelect.selectOption("kovanica_getRewards");
+      await addressInput.fill(testAddress);
+      await executeBtn.click();
+
+      const rewardsPre = page.locator("pre").filter({ hasText: "2.5 KVNC" });
+      await expectVisible(rewardsPre);
+      await expectContainsText(rewardsPre, '"rewards_atoms": "2500000000"');
+      await expectContainsText(rewardsPre, '"rewards_kvnc": "2.5 KVNC"');
+      await expectContainsText(rewardsPre, '"hex_quantity": "0x9502f900"');
+
+      // 4. Verify KVNC copy and absence of KUNA
+      const footerLabel = page.locator('[data-testid="footer-currency-label"]');
+      await expectContainsText(footerLabel, "KVNC (9 decimals)");
+      expect(await page.locator("body").textContent()).not.toContain("KUNA");
+    } finally {
+      await page.close();
+    }
+  });
+
+  // =========================================================================
   // Scenario C1: State Race — Delay Endpoint A, Switch to B, Finish A
   // =========================================================================
   it("prevents delayed response from endpoint A overwriting newer endpoint B", async () => {

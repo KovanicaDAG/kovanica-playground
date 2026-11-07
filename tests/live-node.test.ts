@@ -20,7 +20,7 @@ describe("Playground Live RPC Node Integration", () => {
         );
       }
       console.warn(
-        `[SKIP] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
+        `[BLOCKED] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
       );
       ctx.skip();
       return;
@@ -64,7 +64,7 @@ describe("Playground Live RPC Node Integration", () => {
         );
       }
       console.warn(
-        `[SKIP] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
+        `[BLOCKED] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
       );
       ctx.skip();
       return;
@@ -86,7 +86,7 @@ describe("Playground Live RPC Node Integration", () => {
         );
       }
       console.warn(
-        `[SKIP] Node at ${LIVE_RPC_URL} is in legitimate genesis/unsynced state (committedHeight=${status.committedHeight}, peerCount=${status.peerCount}); skipping stronger nonzero/synced acceptance.`,
+        `[BLOCKED] Stronger nonzero/synced acceptance requires independently demonstrated L1 execution past genesis (current height: ${status.committedHeight}, peers: ${status.peerCount}); skipping stronger nonzero/synced acceptance.`,
       );
       ctx.skip();
       return;

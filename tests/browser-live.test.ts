@@ -7,6 +7,7 @@ import {
   getEffectiveRpcUrl,
   isRequiredLiveMode,
 } from "./helpers/rpc-readiness";
+import { KovanicaClient } from "kovanica-sdk";
 
 const LIVE_RPC_URL = getEffectiveRpcUrl();
 const REQUIRED_LIVE = isRequiredLiveMode();
@@ -49,7 +50,7 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
         );
       }
       console.warn(
-        `[SKIP] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
+        `[BLOCKED] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
       );
       ctx.skip();
       return;
@@ -104,7 +105,7 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
   // =========================================================================
   // Scenario D2: Stronger Live Synced Acceptance
   // =========================================================================
-  it("stronger live acceptance in browser: nonzero height, active peers, and confirmed in-sync", async (ctx) => {
+  it("stronger live acceptance in browser: nonzero height, active peers, executed balance/rewards, truthful sync labels, and lossless KVNC copy", async (ctx) => {
     const readiness = await checkRpcReadiness(LIVE_RPC_URL);
     if (!readiness.available) {
       if (REQUIRED_LIVE) {
@@ -113,7 +114,7 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
         );
       }
       console.warn(
-        `[SKIP] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
+        `[BLOCKED] Live Kovanica RPC unavailable at ${LIVE_RPC_URL}: ${readiness.reason}`,
       );
       ctx.skip();
       return;
@@ -135,10 +136,27 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
         );
       }
       console.warn(
-        `[SKIP] Node at ${LIVE_RPC_URL} is in legitimate genesis/unsynced state (committedHeight=${payload?.committedHeight}, peerCount=${payload?.peerCount}); skipping stronger nonzero/synced acceptance.`,
+        `[BLOCKED] Stronger nonzero/executed acceptance requires independently demonstrated L1 execution past genesis (current height: ${payload?.committedHeight ?? "unknown"}, peers: ${payload?.peerCount ?? "unknown"}). Read-only genesis interop passed; nonzero execution acceptance remains BLOCKED until execution lane produces committed blocks.`,
       );
       ctx.skip();
       return;
+    }
+
+    // Resolve an account address for executed balance & reward assertions (e.g., active validator author)
+    const client = new KovanicaClient(LIVE_RPC_URL);
+    let targetAddress = process.env.KOVANICA_TEST_ADDRESS || process.env.KOVANICA_PRODUCER_ADDRESS;
+    if (!targetAddress) {
+      try {
+        const validators = await client.getValidators({ timeoutMs: 5000 });
+        if (Array.isArray(validators) && validators.length > 0 && validators[0]?.address) {
+          targetAddress = validators[0].address;
+        }
+      } catch {
+        // Fallback to canonical PRO-21 address format
+      }
+    }
+    if (!targetAddress) {
+      targetAddress = "kvnc8d4z00xwk6jz6c4r4rgz5mcdwdjny9thrh3y8f36cpy2rz6emg54rufktdag";
     }
 
     const page = await newTestPage();
@@ -150,7 +168,7 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
         await endpointInput.fill(LIVE_RPC_URL);
       }
 
-      // Stronger live assertions: badge must be Synced
+      // 1. Diagnostics assertions: confirmed in-sync and truthful metrics
       const badge = page.locator('[data-testid="sync-status-badge"]');
       await expect
         .poll(async () => (await badge.textContent())?.trim(), { timeout: 10000 })
@@ -162,8 +180,85 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
         .toBe("Online (Synced)");
 
       const committedHeight = page.locator('[data-testid="diagnostic-committed-height"]');
-      const heightText = (await committedHeight.textContent())?.trim();
-      expect(Number(heightText)).toBeGreaterThan(0);
+      await expect
+        .poll(
+          async () => {
+            const txt = (await committedHeight.textContent())?.trim();
+            return Number(txt) > 0;
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+
+      const tipRound = page.locator('[data-testid="diagnostic-tip-round"]');
+      const tipText = (await tipRound.textContent())?.trim();
+      expect(Number(tipText)).toBeGreaterThan(0);
+
+      const peerCount = page.locator('[data-testid="diagnostic-peer-count"]');
+      const peerText = (await peerCount.textContent())?.trim();
+      expect(Number(peerText)).toBeGreaterThanOrEqual(1);
+
+      const catchingUp = page.locator('[data-testid="diagnostic-catching-up"]');
+      expect(await catchingUp.textContent()).toMatch(/No/i);
+
+      // 2. Executed balance call in Method Explorer
+      const methodSelect = page.locator("#rpc-method-select");
+      await methodSelect.selectOption("kovanica_getBalance");
+
+      const addressInput = page.locator("#param-input-address");
+      await addressInput.fill(targetAddress);
+
+      const executeBtn = page.getByRole("button", { name: "Execute Call" });
+      await executeBtn.click();
+
+      const responseArea = page.locator("text=Response Result");
+      await expect
+        .poll(async () => responseArea.isVisible(), { timeout: 10000 })
+        .toBe(true);
+
+      const responsePre = responseArea.locator("..").locator("pre");
+      await expect
+        .poll(
+          async () => {
+            const txt = await responsePre.textContent();
+            return txt?.includes('"atoms"') && txt?.includes('"kvnc"');
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+
+      const balanceText = await responsePre.textContent();
+      expect(balanceText).toContain('"atoms"');
+      expect(balanceText).toContain('"kvnc"');
+      expect(balanceText).toContain("KVNC");
+      expect(balanceText).not.toContain("KUNA");
+
+      // 3. Executed rewards call in Method Explorer
+      await methodSelect.selectOption("kovanica_getRewards");
+      await addressInput.fill(targetAddress);
+      await executeBtn.click();
+
+      await expect
+        .poll(
+          async () => {
+            const txt = await responsePre.textContent();
+            return txt?.includes('"rewards_atoms"') && txt?.includes('"rewards_kvnc"');
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+
+      const rewardsText = await responsePre.textContent();
+      expect(rewardsText).toContain('"rewards_atoms"');
+      expect(rewardsText).toContain('"rewards_kvnc"');
+      expect(rewardsText).toContain("KVNC");
+      expect(rewardsText).not.toContain("KUNA");
+
+      // 4. Global currency label and copy check
+      const footerLabel = page.locator('[data-testid="footer-currency-label"]');
+      expect(await footerLabel.textContent()).toContain("KVNC (9 decimals)");
+      const pageBodyText = await page.locator("body").innerText();
+      expect(pageBodyText).not.toMatch(/\bKUNA\b/);
     } finally {
       await page.close();
     }
