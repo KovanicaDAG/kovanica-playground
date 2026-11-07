@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CHAIN_IDS,
   getChainConfig,
+  isNodeSynced,
   type KovanicaClient,
   KovanicaClient as SdkClient,
   type MiningInfo,
@@ -23,6 +24,13 @@ function formatJson(data: unknown): string {
   );
 }
 
+interface FetchErrorInfo {
+  hasCorsEvidence: boolean;
+  message: string;
+}
+
+export type SyncBadgeState = "synced" | "catching-up" | "unknown" | "connection-error" | "offline";
+
 export default function App() {
   // Target Network & Endpoint
   const [selectedChainId, setSelectedChainId] = useState<number>(CHAIN_IDS.HYBRID_TESTNET);
@@ -32,7 +40,7 @@ export default function App() {
   const [miningInfo, setMiningInfo] = useState<MiningInfo | null>(null);
   const [nodeError, setNodeError] = useState<string | null>(null);
   const [isProbing, setIsProbing] = useState<boolean>(false);
-  const [isCorsError, setIsCorsError] = useState<boolean>(false);
+  const [fetchErrorInfo, setFetchErrorInfo] = useState<FetchErrorInfo | null>(null);
 
   // Method Explorer state
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
@@ -53,6 +61,8 @@ export default function App() {
 
   // In-flight request controller
   const activeAbortController = useRef<AbortController | null>(null);
+  const activeProbeAbortController = useRef<AbortController | null>(null);
+  const probeSequenceRef = useRef<number>(0);
 
   // Selected method definition
   const currentMethod: MethodDefinition = useMemo(() => {
@@ -67,45 +77,82 @@ export default function App() {
     return new SdkClient(rpcUrl);
   }, [rpcUrl]);
 
-  // Track tab visibility to prevent aggressive polling when hidden
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      setIsTabVisible(document.visibilityState === "visible");
-    };
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
+  // Distinct sync state computation
+  const syncState: SyncBadgeState = useMemo(() => {
+    if (nodeError) return "connection-error";
+    if (!syncStatus) return "offline";
+    if (syncStatus.catchingUp === true) return "catching-up";
+    const confirmed = isNodeSynced(syncStatus);
+    if (confirmed === true) return "synced";
+    if (confirmed === false) return "catching-up";
+    return "unknown";
+  }, [nodeError, syncStatus]);
+
+  // Clear stale network and mining diagnostics
+  const clearDiagnostics = useCallback(() => {
+    setSyncStatus(null);
+    setMiningInfo(null);
+    setConnectedNodeChainId(null);
+    setNodeError(null);
+    setFetchErrorInfo(null);
   }, []);
 
   // Probe node health and capabilities
   const probeNode = useCallback(async () => {
     if (!rpcUrl || !isTabVisible) return;
+
+    // Abort in-flight probe if any
+    if (activeProbeAbortController.current) {
+      activeProbeAbortController.current.abort();
+    }
+
+    const currentSequence = ++probeSequenceRef.current;
+    const probeController = new AbortController();
+    activeProbeAbortController.current = probeController;
+
     setIsProbing(true);
     setNodeError(null);
-    setIsCorsError(false);
+    setFetchErrorInfo(null);
 
     try {
-      // Probe syncStatus
-      const sync = await client.syncStatus({ timeoutMs: 4000 });
+      // Probe syncStatus using canonical SDK contract
+      const sync = await client.syncStatus({
+        timeoutMs: 4000,
+        signal: probeController.signal,
+      });
+
+      // Guard against delayed responses from previous probes or endpoints
+      if (currentSequence !== probeSequenceRef.current) return;
+
       setSyncStatus(sync);
 
       // Probe miningInfo (Chain 5 Hybrid PoW)
       try {
-        const mining = await client.getMiningInfo({ timeoutMs: 3000 });
+        const mining = await client.getMiningInfo({
+          timeoutMs: 3000,
+          signal: probeController.signal,
+        });
+
+        if (currentSequence !== probeSequenceRef.current) return;
+
         setMiningInfo(mining);
         setConnectedNodeChainId(mining.chain_id);
       } catch {
+        if (currentSequence !== probeSequenceRef.current) return;
+
         setMiningInfo(null);
         // If sync has network tag (e.g. "5-xxx"), parse chain ID from it
-        if (sync.network_tag) {
-          const cid = Number.parseInt(sync.network_tag.split("-")[0], 10);
+        if (sync.networkTag) {
+          const cid = Number.parseInt(sync.networkTag.split("-")[0], 10);
           if (!Number.isNaN(cid)) {
             setConnectedNodeChainId(cid);
           }
         }
       }
     } catch (err: any) {
+      if (currentSequence !== probeSequenceRef.current) return;
+      if (probeController.signal.aborted) return;
+
       setSyncStatus(null);
       setMiningInfo(null);
       setConnectedNodeChainId(null);
@@ -113,27 +160,97 @@ export default function App() {
       const msg = err?.message || String(err);
       setNodeError(msg);
 
-      // Check for browser CORS restriction
-      if (
+      // Honest diagnosis of browser fetch failure
+      const isNetworkError =
         msg.includes("Failed to fetch") ||
         msg.includes("NetworkError") ||
-        msg.includes("CORS") ||
-        err?.name === "TypeError"
-      ) {
-        setIsCorsError(true);
+        msg.includes("fetch failed") ||
+        err?.name === "TypeError";
+      const hasCorsEvidence =
+        msg.toLowerCase().includes("cors") && !msg.includes("Failed to fetch");
+
+      if (isNetworkError || hasCorsEvidence) {
+        setFetchErrorInfo({
+          hasCorsEvidence,
+          message: msg,
+        });
       }
     } finally {
-      setIsProbing(false);
+      if (currentSequence === probeSequenceRef.current) {
+        setIsProbing(false);
+        activeProbeAbortController.current = null;
+      }
     }
   }, [client, isTabVisible, rpcUrl]);
 
-  // Probe whenever endpoint changes
+  // Handle explicit endpoint change: clear stale diagnostics immediately and cancel in-flight work
+  const handleEndpointChange = (newUrl: string) => {
+    // Abort in-flight probe
+    if (activeProbeAbortController.current) {
+      activeProbeAbortController.current.abort();
+      activeProbeAbortController.current = null;
+    }
+    // Abort in-flight method execution
+    if (activeAbortController.current) {
+      activeAbortController.current.abort();
+      activeAbortController.current = null;
+      setIsLoading(false);
+    }
+    // Invalidate sequence so delayed in-flight responses are dropped
+    probeSequenceRef.current++;
+
+    // Clear stale diagnostics immediately
+    clearDiagnostics();
+    setRpcUrl(newUrl);
+  };
+
+  // Track tab visibility to prevent aggressive polling when hidden
   useEffect(() => {
-    probeNode();
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState === "visible";
+      setIsTabVisible(visible);
+      if (visible) {
+        probeNode();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [probeNode]);
 
-  // Reset param defaults when method changes
+  // Resource-conscious background polling: pauses when tab is hidden
   useEffect(() => {
+    if (!isTabVisible || !rpcUrl) return;
+
+    const interval = setInterval(() => {
+      probeNode();
+    }, 10_000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [isTabVisible, rpcUrl, probeNode]);
+
+  // Probe whenever endpoint URL or client changes
+  useEffect(() => {
+    probeNode();
+    return () => {
+      if (activeProbeAbortController.current) {
+        activeProbeAbortController.current.abort();
+        activeProbeAbortController.current = null;
+      }
+    };
+  }, [probeNode]);
+
+  // Reset param defaults and cancel running requests when method changes
+  useEffect(() => {
+    if (activeAbortController.current) {
+      activeAbortController.current.abort();
+      activeAbortController.current = null;
+      setIsLoading(false);
+    }
+
     const defaults: Record<string, any> = {};
     for (const p of currentMethod.params) {
       defaults[p.name] = p.defaultValue ?? "";
@@ -275,18 +392,32 @@ export default function App() {
               className={`w-2 h-2 rounded-full ${
                 isProbing
                   ? "bg-amber-400 animate-pulse"
-                  : syncStatus
+                  : syncState === "synced"
                   ? "bg-emerald-400"
+                  : syncState === "catching-up"
+                  ? "bg-amber-400"
+                  : syncState === "unknown"
+                  ? "bg-blue-400"
                   : "bg-red-400"
               }`}
             />
             <span className="text-muted">Node Status:</span>
-            <span className="font-medium text-fg">
-              {isProbing ? "Probing..." : syncStatus ? "Online" : "Disconnected"}
+            <span data-testid="header-node-status" className="font-medium text-fg">
+              {isProbing
+                ? "Probing..."
+                : syncState === "synced"
+                ? "Online (Synced)"
+                : syncState === "catching-up"
+                ? "Online (Catching Up)"
+                : syncState === "unknown"
+                ? "Online (Sync Unknown)"
+                : nodeError
+                ? "Connection Error"
+                : "Disconnected"}
             </span>
-            {syncStatus && (
-              <span className="text-muted ml-1 font-mono">
-                ({syncStatus.peer_count} peers)
+            {syncStatus && syncStatus.peerCount !== undefined && (
+              <span data-testid="header-peer-count" className="text-muted ml-1 font-mono">
+                ({syncStatus.peerCount} peers)
               </span>
             )}
           </div>
@@ -336,13 +467,13 @@ export default function App() {
                   id="rpc-endpoint-input"
                   type="text"
                   value={rpcUrl}
-                  onChange={(e) => setRpcUrl(e.target.value)}
+                  onChange={(e) => handleEndpointChange(e.target.value)}
                   placeholder="http://127.0.0.1:8545/rpc"
                   className="flex-1 bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm font-mono text-fg focus:outline-none focus:border-gold"
                 />
                 <button
                   type="button"
-                  onClick={() => setRpcUrl("http://127.0.0.1:8545/rpc")}
+                  onClick={() => handleEndpointChange("http://127.0.0.1:8545/rpc")}
                   className="px-3 py-2 text-xs bg-surface-2 hover:bg-border rounded-lg border border-border text-muted hover:text-fg whitespace-nowrap transition-colors"
                 >
                   Local Default
@@ -352,9 +483,9 @@ export default function App() {
           </div>
         </section>
 
-        {/* Warnings & Notices */}
+        {/* Chain Mismatch Warning */}
         {hasNetworkMismatch && (
-          <div className="bg-amber-950/40 border border-amber-600/50 rounded-xl p-4 flex items-start gap-3 text-amber-200">
+          <div className="bg-amber-950/40 border border-amber-700/50 rounded-xl p-4 flex items-start gap-3 text-amber-200">
             <span className="text-xl">⚠️</span>
             <div>
               <h2 className="font-semibold text-sm">Chain Identity Mismatch Detected</h2>
@@ -367,19 +498,33 @@ export default function App() {
           </div>
         )}
 
-        {isCorsError && (
-          <div className="bg-red-950/40 border border-red-700/50 rounded-xl p-4 flex items-start gap-3 text-red-200">
-            <span className="text-xl">🚫</span>
+        {/* Honest Network / Connection Error Banner */}
+        {fetchErrorInfo && (
+          <div data-testid="network-error-banner" className="bg-red-950/40 border border-red-700/50 rounded-xl p-4 flex items-start gap-3 text-red-200">
+            <span className="text-xl">⚠️</span>
             <div>
-              <h2 className="font-semibold text-sm">Browser Cross-Origin (CORS) Limitation</h2>
+              <h2 className="font-semibold text-sm">
+                {fetchErrorInfo.hasCorsEvidence
+                  ? "Browser Cross-Origin (CORS) Restriction"
+                  : "Browser Network / Connection Failure"}
+              </h2>
               <p className="text-xs mt-1 text-red-300">
-                The browser could not reach <code className="bg-surface-2 px-1 rounded">{rpcUrl}</code> due to Cross-Origin Resource Sharing (CORS) restrictions.
+                The browser could not reach <code className="bg-surface-2 px-1 rounded">{rpcUrl}</code>.
+                {fetchErrorInfo.hasCorsEvidence
+                  ? " Cross-Origin Resource Sharing (CORS) restrictions blocked the request."
+                  : " Browser fetch failures can have multiple causes and do not prove a CORS policy issue without explicit evidence."}
               </p>
               <ul className="text-xs mt-2 list-disc list-inside space-y-1 text-red-300">
-                <li>If connecting to a local node, ensure it allows browser origins via <code className="text-fg">--rpc-cors</code> or run on <code className="text-fg">127.0.0.1</code>.</li>
-                <li>Browsers block cross-origin RPC calls unless the node explicitly sends <code className="text-fg">Access-Control-Allow-Origin</code>.</li>
-                <li>This playground intentionally operates directly from your browser without an insecure backend proxy.</li>
+                <li><strong>Node Offline / Port Closed:</strong> Ensure the Kovanica node is actively running and listening on the specified port.</li>
+                <li><strong>Endpoint Reachability:</strong> Check hostname, IP address, and network connectivity to the target node.</li>
+                <li><strong>Cross-Origin Policy (CORS):</strong> If the node is on a different origin, it must supply <code className="text-fg">Access-Control-Allow-Origin</code> headers (e.g. run with <code className="text-fg">--rpc-cors</code>).</li>
+                <li><strong>Direct Architecture:</strong> This playground operates directly from your browser without an intermediary server-side proxy.</li>
               </ul>
+              {fetchErrorInfo.message && (
+                <p className="text-[11px] mt-2 text-red-400/80 font-mono">
+                  Reported error: {fetchErrorInfo.message}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -451,52 +596,40 @@ export default function App() {
                             {param.label}
                             {param.required && <span className="text-gold ml-1">*</span>}
                           </span>
-                          <span className="text-muted text-[11px] font-mono lowercase">
+                          <span className="text-[10px] text-muted font-mono uppercase">
                             {param.type}
                           </span>
                         </label>
-
                         {param.type === "boolean" ? (
-                          <div className="flex items-center gap-3 mt-1">
-                            <label className="flex items-center gap-2 text-xs cursor-pointer">
-                              <input
-                                id={inputId}
-                                type="checkbox"
-                                checked={Boolean(paramValues[param.name])}
-                                onChange={(e) =>
-                                  handleParamChange(param.name, e.target.checked, param)
-                                }
-                                className="rounded bg-surface border-border text-gold focus:ring-0"
-                              />
-                              <span className="text-muted">Enable / True</span>
-                            </label>
-                          </div>
+                          <select
+                            id={inputId}
+                            value={paramValues[param.name] ? "true" : "false"}
+                            onChange={(e) =>
+                              handleParamChange(param.name, e.target.value === "true", param)
+                            }
+                            className="bg-surface border border-border rounded-md px-3 py-1.5 text-xs text-fg focus:outline-none focus:border-gold"
+                          >
+                            <option value="false">false</option>
+                            <option value="true">true</option>
+                          </select>
                         ) : (
                           <input
                             id={inputId}
                             type="text"
                             value={paramValues[param.name] ?? ""}
-                            onChange={(e) =>
-                              handleParamChange(param.name, e.target.value, param)
-                            }
-                            placeholder={param.placeholder}
-                            className={`w-full bg-surface border rounded-lg px-3 py-1.5 text-xs font-mono text-fg focus:outline-none ${
-                              hasError
-                                ? "border-red-500 focus:border-red-500"
-                                : "border-border focus:border-gold"
+                            onChange={(e) => handleParamChange(param.name, e.target.value, param)}
+                            placeholder={param.placeholder || ""}
+                            className={`bg-surface border rounded-md px-3 py-1.5 text-xs font-mono text-fg focus:outline-none ${
+                              hasError ? "border-red-500 focus:border-red-500" : "border-border focus:border-gold"
                             }`}
                           />
                         )}
-
-                        {hasError ? (
-                          <span className="text-[11px] text-red-400">
-                            {paramErrors[param.name]}
-                          </span>
-                        ) : param.description ? (
-                          <span className="text-[11px] text-muted">
-                            {param.description}
-                          </span>
-                        ) : null}
+                        {hasError && (
+                          <span className="text-[11px] text-red-400">{paramErrors[param.name]}</span>
+                        )}
+                        {param.description && (
+                          <span className="text-[10px] text-muted">{param.description}</span>
+                        )}
                       </div>
                     );
                   })}
@@ -504,75 +637,70 @@ export default function App() {
               )}
 
               {/* Action Buttons */}
-              <div className="flex items-center gap-3 pt-2">
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={handleExecute}
                   disabled={isLoading}
-                  className="px-5 py-2.5 rounded-lg bg-gold hover:bg-gold-hover text-bg font-semibold text-sm transition-colors flex items-center gap-2 disabled:opacity-50"
+                  className="px-5 py-2.5 bg-gold hover:bg-gold/90 text-bg font-semibold rounded-lg text-sm transition-colors disabled:opacity-50 flex items-center gap-2"
                 >
-                  {isLoading ? (
-                    <>
-                      <span className="w-3.5 h-3.5 border-2 border-bg border-t-transparent rounded-full animate-spin" />
-                      Executing...
-                    </>
-                  ) : (
-                    "Send Request"
+                  {isLoading && (
+                    <span className="w-3.5 h-3.5 border-2 border-bg border-t-transparent rounded-full animate-spin" />
                   )}
+                  <span>{isLoading ? "Executing..." : "Execute Call"}</span>
                 </button>
 
                 {isLoading && (
                   <button
                     type="button"
                     onClick={handleCancel}
-                    className="px-4 py-2.5 rounded-lg bg-surface-2 hover:bg-border text-muted hover:text-fg text-sm border border-border transition-colors"
+                    className="px-4 py-2.5 bg-surface-2 hover:bg-border border border-border text-xs text-muted hover:text-fg rounded-lg transition-colors"
                   >
                     Cancel
                   </button>
                 )}
-
-                {elapsedMs !== null && (
-                  <span className="text-xs text-muted ml-auto font-mono">
-                    Elapsed: <span className="text-fg font-medium">{elapsedMs}ms</span>
-                  </span>
-                )}
               </div>
 
-              {/* Output Viewer: Request Payload */}
+              {/* Request Payload Preview */}
               {requestPayload && (
-                <div className="flex flex-col gap-2 mt-2">
+                <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between text-xs text-muted">
-                    <span className="font-semibold uppercase tracking-wider text-[11px]">Request Payload</span>
+                    <span className="font-medium">JSON-RPC Request</span>
                     <button
                       type="button"
                       onClick={() => copyToClipboard(requestPayload, "req")}
-                      className="text-muted hover:text-fg transition-colors"
+                      className="text-subtle hover:text-fg"
                     >
                       {copySuccess === "req" ? "Copied!" : "Copy"}
                     </button>
                   </div>
-                  <pre className="bg-surface-2 p-3.5 rounded-lg border border-border text-xs font-mono text-muted overflow-x-auto max-h-40">
+                  <pre className="bg-surface-2 p-3 rounded-lg border border-border text-xs font-mono text-muted overflow-x-auto">
                     {requestPayload}
                   </pre>
                 </div>
               )}
 
-              {/* Output Viewer: Response / Error */}
+              {/* Response or Error */}
               {executionError && (
-                <div className="bg-red-950/40 border border-red-800/60 rounded-lg p-4 text-xs font-mono text-red-200 mt-2">
-                  <div className="font-semibold text-red-300 mb-1">Execution Error:</div>
-                  <div>{executionError}</div>
+                <div className="bg-red-950/40 border border-red-700/50 rounded-lg p-4 text-xs font-mono text-red-200">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold text-red-400">RPC Error</span>
+                    {elapsedMs !== null && <span>{elapsedMs} ms</span>}
+                  </div>
+                  <p className="break-all">{executionError}</p>
                 </div>
               )}
 
               {responsePayload && (
-                <div className="flex flex-col gap-2 mt-2">
+                <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between text-xs text-muted">
-                    <span className="font-semibold uppercase tracking-wider text-[11px] text-emerald-400">Response</span>
+                    <span className="font-medium">
+                      Response Result {elapsedMs !== null && `(${elapsedMs} ms)`}
+                    </span>
                     <button
                       type="button"
                       onClick={() => copyToClipboard(responsePayload, "res")}
-                      className="text-muted hover:text-fg transition-colors"
+                      className="text-subtle hover:text-fg"
                     >
                       {copySuccess === "res" ? "Copied!" : "Copy"}
                     </button>
@@ -591,8 +719,27 @@ export default function App() {
             <div className="bg-surface rounded-xl border border-border p-5 flex flex-col gap-4">
               <h2 className="text-sm font-semibold text-fg flex items-center justify-between border-b border-border pb-3">
                 <span>Node Diagnostics</span>
-                <span className="text-xs font-normal text-muted font-mono">
-                  {syncStatus ? "Synced" : "Offline"}
+                <span
+                  data-testid="sync-status-badge"
+                  className={`text-xs font-normal font-mono ${
+                    syncState === "synced"
+                      ? "text-emerald-400"
+                      : syncState === "catching-up"
+                      ? "text-amber-400"
+                      : syncState === "connection-error"
+                      ? "text-red-400"
+                      : "text-muted"
+                  }`}
+                >
+                  {syncState === "synced"
+                    ? "Synced"
+                    : syncState === "catching-up"
+                    ? "Catching Up"
+                    : syncState === "connection-error"
+                    ? "Connection Error"
+                    : syncState === "unknown"
+                    ? "Unknown"
+                    : "Offline"}
                 </span>
               </h2>
 
@@ -600,47 +747,65 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3 text-xs">
                   <div className="bg-surface-2 p-3 rounded-lg border border-border/60">
                     <span className="text-muted block text-[11px]">Committed Height</span>
-                    <span className="font-mono text-base font-semibold text-fg">
-                      {syncStatus.committed_height?.toString() ?? "0"}
+                    <span data-testid="diagnostic-committed-height" className="font-mono text-base font-semibold text-fg">
+                      {syncStatus.committedHeight !== undefined ? syncStatus.committedHeight.toString() : "—"}
                     </span>
                   </div>
 
                   <div className="bg-surface-2 p-3 rounded-lg border border-border/60">
                     <span className="text-muted block text-[11px]">Local Tip Round</span>
-                    <span className="font-mono text-base font-semibold text-fg">
-                      {syncStatus.local_tip_round?.toString() ?? "0"}
+                    <span data-testid="diagnostic-tip-round" className="font-mono text-base font-semibold text-fg">
+                      {syncStatus.localTipRound !== undefined ? syncStatus.localTipRound.toString() : "—"}
                     </span>
                   </div>
 
                   <div className="bg-surface-2 p-3 rounded-lg border border-border/60">
                     <span className="text-muted block text-[11px]">Peer Count</span>
-                    <span className="font-mono text-base font-semibold text-fg">
-                      {syncStatus.peer_count}
+                    <span data-testid="diagnostic-peer-count" className="font-mono text-base font-semibold text-fg">
+                      {syncStatus.peerCount !== undefined ? syncStatus.peerCount.toString() : "—"}
                     </span>
                   </div>
 
                   <div className="bg-surface-2 p-3 rounded-lg border border-border/60">
                     <span className="text-muted block text-[11px]">Catching Up</span>
                     <span
+                      data-testid="diagnostic-catching-up"
                       className={`font-mono text-sm font-semibold ${
-                        syncStatus.catching_up ? "text-amber-400" : "text-emerald-400"
+                        syncStatus.catchingUp === true
+                          ? "text-amber-400"
+                          : syncStatus.catchingUp === false
+                          ? "text-emerald-400"
+                          : "text-muted"
                       }`}
                     >
-                      {syncStatus.catching_up ? "Active" : "No"}
+                      {syncStatus.catchingUp === true
+                        ? "Active"
+                        : syncStatus.catchingUp === false
+                        ? "No"
+                        : "Unknown"}
                     </span>
                   </div>
 
-                  {syncStatus.network_tag && (
+                  {syncStatus.behindBy !== undefined && syncStatus.behindBy > 0n && (
+                    <div className="col-span-2 bg-surface-2 p-3 rounded-lg border border-border/60 flex items-center justify-between">
+                      <span className="text-muted text-[11px]">Behind By</span>
+                      <span data-testid="diagnostic-behind-by" className="font-mono text-xs text-amber-400 font-semibold">
+                        {syncStatus.behindBy.toString()} rounds
+                      </span>
+                    </div>
+                  )}
+
+                  {syncStatus.networkTag && (
                     <div className="col-span-2 bg-surface-2 p-3 rounded-lg border border-border/60">
                       <span className="text-muted block text-[11px]">Network Identity Tag</span>
-                      <span className="font-mono text-xs text-gold break-all">
-                        {syncStatus.network_tag}
+                      <span data-testid="diagnostic-network-tag" className="font-mono text-xs text-gold break-all">
+                        {syncStatus.networkTag}
                       </span>
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="text-xs text-muted p-4 text-center">
+                <div data-testid="diagnostic-empty-state" className="text-xs text-muted p-4 text-center">
                   {nodeError ? `Cannot reach node: ${nodeError}` : "Connect to a Kovanica node to view status"}
                 </div>
               )}
