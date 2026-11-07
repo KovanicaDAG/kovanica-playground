@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:live": "vitest run tests/live-node.test.ts",
+    "test:live:required": "KOVANICA_REQUIRE_LIVE=1 vitest run tests/live-node.test.ts"
   },
   "dependencies": {
     "kovanica-sdk": "file:../kovanica-sdk",

@@ -88,6 +88,34 @@ npm run dev
 
 ---
 
+## Testing & Live RPC Verification Modes
+
+The test suite supports two explicit modes for live RPC verification:
+
+1. **Default / Offline Mode (`npm test`):**
+   - Offline unit tests, allowlist assertions, and rendered UI regressions run and assert deterministically against isolated fixtures.
+   - When live node prerequisites are unavailable, live integration tests produce a **real test skip** (`[skipped]`), separately reported from passing assertions rather than counting as passed.
+
+2. **Required-Live Mode (`npm run test:live:required` or `KOVANICA_REQUIRE_LIVE=1 npm test`):**
+   - Enforces live verification against a configured endpoint (`KOVANICA_RPC_URL` or `LIVE_RPC_URL`, defaulting to `http://127.0.0.1:8545/rpc`).
+   - Verifies genuine JSON-RPC 2.0 readiness (HTTP 200 alone is insufficient; invalid payloads, non-JSON HTML, or RPC error objects produce a non-zero failure exit).
+   - Separates verification into two distinct scenarios:
+     - **Basic Read-Only Interoperability:** Verifies canonical RPC queries (`kovanica_syncStatus`, `kovanica_blockNumber`) across any valid node, accommodating legitimate genesis and 0-peer unsynced states.
+     - **Stronger Synced Acceptance:** Enforces strict advanced node conditions (`committedHeight > 0n`, active `peerCount > 0`, `catchingUp === false`, and `isNodeSynced(status) === true`).
+
+```bash
+# Run all offline and UI tests (skips live verification if node is unavailable)
+npm test
+
+# Run live RPC verification against an isolated node
+npm run test:live
+
+# Enforce required-live verification (fails with non-zero exit if unavailable)
+npm run test:live:required
+```
+
+---
+
 ## CI / Clean Checkout Workflow
 
 In CI or isolated environments, the SDK is checked out at the exact pinned revision before building:
