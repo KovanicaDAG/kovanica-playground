@@ -1,5 +1,6 @@
 import {
   CHAIN_IDS,
+  formatKvnc,
   type KovanicaClient,
   isValidAddress,
   type RequestOptions,
@@ -103,7 +104,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
   {
     method: "kovanica_getBalance",
     category: "Account",
-    description: "Returns the account balance in atomic units (atoms).",
+    description: "Returns the account balance in atomic units (atoms) and formatted KVNC.",
     params: [
       {
         name: "address",
@@ -118,6 +119,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
       const atoms = await client.getBalance(params.address, options);
       return {
         atoms: atoms.toString(),
+        kvnc: `${formatKvnc(atoms)} KVNC`,
         hex_quantity: `0x${atoms.toString(16)}`,
       };
     },
@@ -255,7 +257,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
   {
     method: "kovanica_getStake",
     category: "Staking",
-    description: "Returns the bonded validator stake for a specific address.",
+    description: "Returns the bonded validator stake for a specific address in atoms and KVNC.",
     params: [
       {
         name: "address",
@@ -269,6 +271,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
       const stake = await client.getStake(params.address, options);
       return {
         stake_atoms: stake.toString(),
+        stake_kvnc: `${formatKvnc(stake)} KVNC`,
         hex_quantity: `0x${stake.toString(16)}`,
       };
     },
@@ -276,7 +279,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
   {
     method: "kovanica_getRewards",
     category: "Staking",
-    description: "Returns cumulative earned rewards for an address.",
+    description: "Returns cumulative earned rewards for an address in atoms and KVNC.",
     params: [
       {
         name: "address",
@@ -290,6 +293,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
       const rewards = await client.getRewards(params.address, options);
       return {
         rewards_atoms: rewards.toString(),
+        rewards_kvnc: `${formatKvnc(rewards)} KVNC`,
         hex_quantity: `0x${rewards.toString(16)}`,
       };
     },

@@ -11,7 +11,7 @@ describe("Immutable SDK Pin & Traceability", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     const pinnedSha = pkg?.kovanicaSdk?.testedRevision;
 
-    expect(pinnedSha).toBe("2c88aa782d2049b91248ab6716f74a0f6b94325e");
+    expect(pinnedSha).toBe("8e52f03b1593a4d856b0bcbbb21e0109f00e4653");
     expect(pinnedSha).toMatch(/^[0-9a-f]{40}$/);
 
     const ciWorkflow = fs.readFileSync(path.join(rootDir, ".github/workflows/ci.yml"), "utf8");
@@ -19,7 +19,13 @@ describe("Immutable SDK Pin & Traceability", () => {
     expect(ciWorkflow).not.toMatch(/repository:\s*KovanicaDAG\/kovanica-sdk[\s\S]*?ref:\s*main/);
 
     const installedSdkDir = path.join(rootDir, "node_modules", "kovanica-sdk");
-    expect(fs.existsSync(path.join(installedSdkDir, "dist", "index.js"))).toBe(true);
+    const distIndexPath = path.join(installedSdkDir, "dist", "index.js");
+    expect(fs.existsSync(distIndexPath)).toBe(true);
+
+    // Confirm the compiled bundle includes the SDK #4 transport contract & envelope validation
+    const distContent = fs.readFileSync(distIndexPath, "utf8");
+    expect(distContent).toContain("JSON-RPC response ID mismatch");
+    expect(distContent).toContain("neither result nor error member present");
 
     const markerPath = path.join(installedSdkDir, ".tested-revision");
     if (fs.existsSync(markerPath)) {

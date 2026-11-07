@@ -394,4 +394,80 @@ describe("Playground Node Diagnostics UI Regressions", () => {
       expect(probeCount).toBeGreaterThan(initialProbes);
     });
   });
+
+  // 11. SDK #4 envelope & ID mismatch rejection and recovery
+  it("rejects invalid JSON-RPC 2.0 envelopes and mismatched response IDs, then recovers on next valid probe", async () => {
+    let mode: "id-mismatch" | "invalid-envelope" | "valid" = "id-mismatch";
+
+    globalThis.fetch = vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string);
+      if (mode === "id-mismatch") {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 999999,
+              result: { committedHeight: "100", localTipRound: "100", peerCount: 2, catchingUp: false },
+            }),
+        };
+      }
+      if (mode === "invalid-envelope") {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({ jsonrpc: "2.0", id: body.id }),
+        };
+      }
+      return {
+        ok: true,
+        text: async () =>
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { committedHeight: "321", localTipRound: "321", peerCount: 4, catchingUp: false },
+          }),
+      };
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-status-badge").textContent).toBe("Connection Error");
+    });
+    expect(screen.getByTestId("diagnostic-empty-state").textContent).toContain(
+      "JSON-RPC response ID mismatch",
+    );
+
+    mode = "invalid-envelope";
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("diagnostic-empty-state").textContent).toContain(
+        "neither result nor error member present",
+      );
+    });
+
+    mode = "valid";
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("sync-status-badge").textContent).toBe("Synced");
+    });
+    expect(screen.getByTestId("diagnostic-committed-height").textContent).toBe("321");
+  });
+
+  // 12. User-visible currency copy is KVNC, never KUNA
+  it("renders KVNC currency copy and never renders stale KUNA ticker in user-visible UI", async () => {
+    mockRpc((method) => {
+      if (method === "kovanica_syncStatus") {
+        return { committedHeight: "0", localTipRound: "0", peerCount: 0, catchingUp: false };
+      }
+      return null;
+    });
+
+    const { container } = render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("footer-currency-label").textContent).toContain("KVNC (9 decimals)");
+    });
+    expect(container.textContent).not.toContain("KUNA");
+  });
 });
