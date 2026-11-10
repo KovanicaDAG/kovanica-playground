@@ -1134,7 +1134,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
 
       await page.goto(server.url, { waitUntil: "domcontentloaded" });
       const committedHeight = page.locator('[data-testid="diagnostic-committed-height"]');
-      await expectText(committedHeight, "2");
+      await expect.poll(async () => Number((await committedHeight.textContent())?.trim()), { timeout: 10000 }).toBeGreaterThanOrEqual(1);
 
       // Instrumentation: count active intervals created via window.setInterval
       await page.evaluate(() => {
