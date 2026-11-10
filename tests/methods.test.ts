@@ -11,7 +11,7 @@ describe("Immutable SDK Pin & Traceability", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
     const pinnedSha = pkg?.kovanicaSdk?.testedRevision;
 
-    expect(pinnedSha).toBe("b36d63b04af9483cce96647071f1e3de8c143231");
+    expect(pinnedSha).toBe("5da854cab753b29c01dbcf6e4d2262ea861e3533");
     expect(pinnedSha).toMatch(/^[0-9a-f]{40}$/);
 
     const ciWorkflow = fs.readFileSync(path.join(rootDir, ".github/workflows/ci.yml"), "utf8");
@@ -80,12 +80,13 @@ describe("Playground Allowlisted Methods", () => {
     // Missing required param
     expect(validateParam(addressParam, "").valid).toBe(false);
 
-    // Bare hex on Mainnet (Chain 1) -> invalid
+    // Bare hex on Mainnet (Chain 1) and Testnet (Chain 2) -> invalid (strict PRO-21)
     const hex = "0x" + "00".repeat(32);
     expect(validateParam(addressParam, hex, CHAIN_IDS.MAINNET).valid).toBe(false);
+    expect(validateParam(addressParam, hex, CHAIN_IDS.TESTNET).valid).toBe(false);
 
-    // Bare hex on Hybrid Testnet (Chain 5) -> valid legacy address
-    expect(validateParam(addressParam, hex, CHAIN_IDS.HYBRID_TESTNET).valid).toBe(true);
+    // Bare hex on Devnet (Chain 3) -> valid legacy address
+    expect(validateParam(addressParam, hex, CHAIN_IDS.DEVNET).valid).toBe(true);
   });
 
   it("validates hex32 parameters", () => {

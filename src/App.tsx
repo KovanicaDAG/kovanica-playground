@@ -33,7 +33,7 @@ export type SyncBadgeState = "synced" | "catching-up" | "unknown" | "connection-
 
 export default function App() {
   // Target Network & Endpoint
-  const [selectedChainId, setSelectedChainId] = useState<number>(CHAIN_IDS.HYBRID_TESTNET);
+  const [selectedChainId, setSelectedChainId] = useState<number>(CHAIN_IDS.TESTNET);
   const [rpcUrl, setRpcUrl] = useState<string>("http://127.0.0.1:8545/rpc");
   const [connectedNodeChainId, setConnectedNodeChainId] = useState<number | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
@@ -505,10 +505,8 @@ export default function App() {
                 className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-gold"
               >
                 <option value={CHAIN_IDS.MAINNET}>Mainnet (Chain 1)</option>
-                <option value={CHAIN_IDS.TESTNET}>Testnet (Chain 2 - Legacy)</option>
+                <option value={CHAIN_IDS.TESTNET}>Testnet (Chain 2)</option>
                 <option value={CHAIN_IDS.DEVNET}>Devnet (Chain 3)</option>
-                <option value={CHAIN_IDS.TESTNET_V2}>Testnet V2 (Chain 4)</option>
-                <option value={CHAIN_IDS.HYBRID_TESTNET}>Hybrid PoW Testnet (Chain 5)</option>
                 <option value={CHAIN_IDS.LOCAL}>Local Devnet (Chain 1337)</option>
               </select>
             </div>
@@ -871,10 +869,10 @@ export default function App() {
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <div>
                   <h2 className="text-sm font-semibold text-fg">Hybrid PoW & DAG Info</h2>
-                  <p className="text-[11px] text-muted">Chain 5 testnet metrics (ADR 0003)</p>
+                  <p className="text-[11px] text-muted">Chain 2 testnet metrics (ADR 0003)</p>
                 </div>
                 <span className="px-2 py-0.5 text-[10px] font-medium rounded bg-gold/10 text-gold border border-gold/20">
-                  Chain 5
+                  Chain 2
                 </span>
               </div>
 
@@ -928,9 +926,9 @@ export default function App() {
                 </div>
               ) : (
                 <div className="bg-surface-2/60 p-4 rounded-lg border border-border/60 text-xs text-muted text-center">
-                  <p>PoW Mining info is available on Chain 5 (Hybrid PoW testnet).</p>
+                  <p>PoW Mining info is available on Chain 2 (Hybrid PoW testnet).</p>
                   <p className="mt-1 text-[11px] text-subtle">
-                    Chains 1–4 operate under Mysticeti consensus.
+                    Mainnet (Chain 1) and Devnet (Chain 3) parameter profiles.
                   </p>
                 </div>
               )}

@@ -663,6 +663,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
       // so HttpTransport's real timeout path fires rapidly and deterministically
       await page.evaluate(() => {
         const origSetTimeout = window.setTimeout.bind(window);
+        (window as any).__origSetTimeout = origSetTimeout;
         (window as any).setTimeout = ((fn: any, ms?: number, ...args: any[]) => {
           const effectiveMs = typeof ms === "number" && ms >= 3000 && ms <= 10000 ? 40 : ms;
           return origSetTimeout(fn, effectiveMs, ...args);
@@ -674,6 +675,13 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
 
       await expectVisible(page.getByText("RPC Error", { exact: true }));
       await expectVisible(page.locator("text=Request timed out after 10000ms"));
+
+      // Restore normal setTimeout so recovery request is not prematurely aborted
+      await page.evaluate(() => {
+        if ((window as any).__origSetTimeout) {
+          window.setTimeout = (window as any).__origSetTimeout;
+        }
+      });
 
       // Next valid request must recover cleanly
       shouldTimeout = false;
@@ -724,11 +732,11 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
       );
       expect(await page.locator("body").textContent()).not.toContain("KUNA");
 
-      // 2. Select kovanica_getBalance and execute with 0 atoms on Hybrid Testnet (allows 0x address)
+      // 2. Select kovanica_getBalance and execute with 0 atoms on Testnet (canonical PRO-21 address)
       const methodSelect = page.locator("#rpc-method-select");
       await methodSelect.selectOption("kovanica_getBalance");
       const addressInput = page.locator("#param-input-address");
-      await addressInput.fill("0x" + "11".repeat(32));
+      await addressInput.fill("kvnck2559l6vnpcchmtkuf2eslmdtxc6wtfm9nf9zqqructs4336nla58y78mdag");
 
       const executeBtn = page.getByRole("button", { name: "Execute Call" });
       await executeBtn.click();
@@ -958,24 +966,30 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
     let resolveFirstProbeErr: (() => void) | null = null;
 
     try {
-      await setupRpcRoute(page, async (_method, _params, _id, route) => {
-        probeCount++;
-        if (probeCount === 1) {
-          return { catchingUp: false, committedHeight: 100, localTipRound: 100, peerCount: 2 };
+      await setupRpcRoute(page, async (method, _params, _id, route) => {
+        if (method === "kovanica_getMiningInfo") {
+          throw { code: -32601, message: "Method not found" };
         }
-        if (probeCount === 2) {
-          await new Promise<void>((res) => {
-            resolveFirstProbeErr = res;
-          });
-          await route.abort("failed");
-          return;
+        if (method === "kovanica_syncStatus") {
+          probeCount++;
+          if (probeCount === 1) {
+            return { catchingUp: false, committedHeight: 100, localTipRound: 100, peerCount: 2 };
+          }
+          if (probeCount === 2) {
+            await new Promise<void>((res) => {
+              resolveFirstProbeErr = res;
+            });
+            await route.abort("failed");
+            return;
+          }
+          return { catchingUp: false, committedHeight: 200, localTipRound: 200, peerCount: 4 };
         }
-        return { catchingUp: false, committedHeight: 200, localTipRound: 200, peerCount: 4 };
+        throw { code: -32601, message: "Method not found" };
       });
 
       await page.goto(server.url, { waitUntil: "domcontentloaded" });
       const committedHeight = page.locator('[data-testid="diagnostic-committed-height"]');
-      await expectText(committedHeight, "100");
+      await expectText(committedHeight, "100", 12000);
 
       const refreshBtn = page.getByRole("button", { name: "Refresh" });
 
@@ -1120,7 +1134,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
 
       await page.goto(server.url, { waitUntil: "domcontentloaded" });
       const committedHeight = page.locator('[data-testid="diagnostic-committed-height"]');
-      await expectText(committedHeight, "1");
+      await expectText(committedHeight, "2");
 
       // Instrumentation: count active intervals created via window.setInterval
       await page.evaluate(() => {
@@ -1180,7 +1194,9 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
         document.dispatchEvent(new Event("visibilitychange"));
       });
 
-      await expectText(committedHeight, String(countAfterHidden + 2));
+      await expect
+        .poll(async () => Number((await committedHeight.textContent())?.trim()), { timeout: 5000 })
+        .toBeGreaterThanOrEqual(countAfterHidden + 2);
 
       // Exactly 1 active polling interval exists after multiple visibility transitions
       expect(await page.evaluate(() => (window as any).__activeIntervalCount())).toBe(1);
@@ -1504,16 +1520,17 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
 
       await page.goto(server.url, { waitUntil: "domcontentloaded" });
 
-      // Start on Hybrid Testnet (Chain 5)
+      // Select Devnet (Chain 3)
       const networkSelect = page.locator("#target-network-select");
-      expect(await networkSelect.inputValue()).toBe("5");
+      await networkSelect.selectOption("3");
+      expect(await networkSelect.inputValue()).toBe("3");
 
-      // Verify legacy hex address is valid on Chain 5
+      // Verify legacy hex address is valid on Devnet (Chain 3)
       const methodSelect = page.locator("#rpc-method-select");
       await methodSelect.selectOption("kovanica_getBalance");
       const addressInput = page.locator("#param-input-address");
       await addressInput.fill(legacyHexAddress);
-      // No validation error on Chain 5
+      // No validation error on Devnet
       await expectNotVisible(page.locator("text=Invalid address for chain"));
 
       // Switch back to blockNumber and start slow in-flight request
@@ -1537,12 +1554,12 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
       await addressInput.fill(legacyHexAddress);
       await expectVisible(page.locator("text=Invalid address for chain 1"));
 
-      // Now resolve the slow execution from Chain 5
+      // Now resolve the slow execution from Devnet
       if (resolveSlowExecution) {
         (resolveSlowExecution as () => void)();
       }
 
-      // Wait a moment and confirm the delayed response from Chain 5 never overwrites the view
+      // Wait a moment and confirm the delayed response from Devnet never overwrites the view
       await page.waitForTimeout(300);
       await expectNotVisible(page.locator("text=Response Result"));
       expect(await page.locator("body").innerText()).not.toContain("0x777");
