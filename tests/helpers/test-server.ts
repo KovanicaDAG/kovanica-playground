@@ -37,7 +37,7 @@ function needsBuild(distDir: string): boolean {
   return srcFiles.some((f) => fs.existsSync(f) && fs.statSync(f).mtimeMs > distMtime);
 }
 
-export async function startTestServer(): Promise<TestServer> {
+export async function startTestServer(preferredPort = 0): Promise<TestServer> {
   const distDir = path.resolve(projectRoot, "dist");
   if (needsBuild(distDir)) {
     execSync("npm run build", { cwd: projectRoot, stdio: "inherit" });
@@ -70,8 +70,17 @@ export async function startTestServer(): Promise<TestServer> {
   });
 
   await new Promise<void>((resolve, reject) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-    server.once("error", reject);
+    const tryPort = (port: number) => {
+      server.listen(port, "127.0.0.1", () => resolve());
+      server.once("error", (err: any) => {
+        if (err.code === "EADDRINUSE" && port !== 0) {
+          tryPort(0);
+        } else {
+          reject(err);
+        }
+      });
+    };
+    tryPort(preferredPort);
   });
 
   const address = server.address();

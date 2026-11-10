@@ -17,7 +17,7 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
   let browser: Browser;
 
   beforeAll(async () => {
-    server = await startTestServer();
+    server = await startTestServer(5173);
     browser = await chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -216,7 +216,7 @@ describe("Browser Live RPC Node Acceptance (Real Headless Chromium)", { timeout:
         .poll(async () => responseArea.isVisible(), { timeout: 10000 })
         .toBe(true);
 
-      const responsePre = responseArea.locator("..").locator("pre");
+      const responsePre = responseArea.locator("../..").locator("pre");
       await expect
         .poll(
           async () => {
