@@ -22,21 +22,21 @@ Kovanica Playground reflects the established Kovanica design system:
 ## Features
 
 1. **Network & Endpoint Selector:**
-   - Choose between Mainnet (1), Testnet (2), Devnet (3), Testnet V2 (4), Hybrid PoW Testnet (5), and Local Devnet (1337).
+   - Choose between the canonical Kovanica networks: Mainnet (1), Testnet (2), Devnet (3), and Local Devnet (1337).
    - Configurable RPC URL (defaults to local loopback node `http://127.0.0.1:8545/rpc`).
    - **Chain Mismatch Warning:** Alerts the developer immediately if the connected node reports a Chain ID that does not match the active target network.
    - **Honest Connectivity Diagnostics:** Surfaces detailed connection failure diagnostics explaining possible root causes (node offline, port closed, network unreachable, CORS) without falsely claiming CORS is confirmed without evidence.
 
 2. **Allowlisted Read-Only RPC Method Explorer:**
    - Category filtering across Chain, Account, Transaction, Staking, Diagnostics, and Mining.
-   - Dynamic parameter forms with live chain-aware validation (e.g. enforcing canonical 64-character PRO-21 base32 address format `kvnc...dag` on Mainnet/Testnet while allowing legacy hex on Devnet/Chain 5).
+   - Dynamic parameter forms with live chain-aware validation (enforcing canonical 64-character PRO-21 base32 address format `kvnc...dag` strictly on Mainnet (1) and Testnet (2), while allowing legacy hex on Devnet (3) and Local Devnet (1337)).
    - Formatted request payload, response payload, and millisecond execution timer.
    - Cancellation support via `AbortController`.
 
-3. **Node Diagnostics & Hybrid PoW / Chain 5 Panels:**
+3. **Node Diagnostics & Hybrid PoW (Chains 1 & 2) Panels:**
    - Distinct node synchronization states: **Catching Up**, **Synced** (SDK-confirmed), **Unknown** (indeterminate/unconfirmed), and **Connection Error**. A successful RPC response alone is not treated as proof of synchronization.
    - Preserves explicit zeros (`0`, `0n`) and full 64-bit integer precision (`bigint`). Missing or uninitialized quantities render clearly as `—` rather than misleading zeros.
-   - Dedicated Chain 5 panel displaying target block time (4000 ms), GHOSTDAG K (5), mining difficulty, target bits, and active DAG tips. Shows clear fallback notice on non-hybrid chains.
+   - Dedicated Hybrid PoW & DAG panel for Mainnet (Chain 1) and Testnet (Chain 2) displaying target block time (4000 ms), GHOSTDAG K (5), mining difficulty, target bits, and active DAG tips. Shows clear fallback notice on non-hybrid development chains (Devnet Chain 3 and Local Chain 1337).
 
 4. **Resource-Conscious Polling & Endpoint Isolation:**
    - Listens to `document.visibilityState`: pauses background polling whenever the browser tab is hidden or minimized, resuming immediately upon returning.
@@ -121,7 +121,7 @@ npm run test:browser:live:required
 
 ## Chain-ID Inventory
 
-See [`docs/chain-id-inventory.md`](docs/chain-id-inventory.md) for the complete inventory of chain-ID assumptions across `kovanica-playground` and `kovanica-sdk`, including why L1 `hybrid5` (Chain 5) is not equivalent to `chain2` (Chain 2).
+See [`docs/chain-id-inventory.md`](docs/chain-id-inventory.md) for the complete inventory of canonical chain-ID definitions (`1`, `2`, `3`, `1337`) across `kovanica-playground`, `kovanica-sdk`, and L1.
 
 ---
 

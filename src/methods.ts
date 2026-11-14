@@ -331,7 +331,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
   {
     method: "kovanica_getMiningInfo",
     category: "Mining & DAG",
-    description: "Returns PoW mining metrics, difficulty, and DAA target (Hybrid PoW / Chain 2).",
+    description: "Returns PoW mining metrics, difficulty, and DAA target (Hybrid PoW / Chains 1 & 2).",
     params: [],
     execute: async (client, _params, options) => {
       return client.getMiningInfo(options);
@@ -340,7 +340,7 @@ export const ALLOWLISTED_METHODS: MethodDefinition[] = [
   {
     method: "kovanica_getDagTips",
     category: "Mining & DAG",
-    description: "Returns active DAG tip block hashes (Hybrid PoW / Chain 2).",
+    description: "Returns active DAG tip block hashes (Hybrid PoW / Chains 1 & 2).",
     params: [],
     execute: async (client, _params, options) => {
       return client.getDagTips(options);
