@@ -153,7 +153,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             localTipRound: 0,
             peerCount: 0,
             peers: [],
-            networkTag: "4-genesis-test",
+            networkTag: "3-genesis-test",
           };
         }
         if (method === "kovanica_getMiningInfo") {
@@ -196,12 +196,12 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: largeCommittedHeight,
             localTipRound: largeTipRound,
             peerCount: 8,
-            networkTag: "5-large-int",
+            networkTag: "2-large-int",
           };
         }
         if (method === "kovanica_getMiningInfo") {
           return {
-            chain_id: 5,
+            chain_id: 2,
             target_block_time_ms: 4000,
             ghostdag_k: 5,
             target_bits: "0x1d00ffff",
@@ -277,7 +277,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             localTipRound: 500,
             peerCount: 4,
             behindBy: 380,
-            networkTag: "4-syncing",
+            networkTag: "2-syncing",
           };
         }
         throw { code: -32601, message: "Method not found" };
@@ -376,7 +376,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: 500,
             localTipRound: 1500,
             peerCount: 0,
-            networkTag: "4-isolated-nonzero",
+            networkTag: "2-isolated-nonzero",
           };
         }
         throw { code: -32601, message: "Method not found" };
@@ -552,7 +552,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: 777,
             localTipRound: 777,
             peerCount: 4,
-            networkTag: "4-recovered",
+            networkTag: "2-recovered",
           };
         }
         if (method === "kovanica_blockNumber") {
@@ -786,16 +786,21 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: 8,
             localTipRound: 9,
             peerCount: 3,
-            network: "hybrid-testnet-5",
+            networkTag: "2-hybrid-testnet",
           };
         }
-        if (method === "kovanica_miningInfo") {
+        if (method === "kovanica_getMiningInfo") {
           return {
-            activeMining: false,
-            blockIntervalSeconds: 4,
-            currentRound: 9,
-            miningTarget: "0x0000ffff00000000000000000000000000000000000000000000000000000000",
-            rewardPerBlockAtoms: 2500000000,
+            chain_id: 2,
+            mining_enabled: false,
+            mining_threads: 1,
+            target_bits: "0x1d00ffff",
+            target: "0x0000ffff00000000000000000000000000000000000000000000000000000000",
+            difficulty: "100",
+            target_block_time_ms: 4000,
+            ghostdag_k: 5,
+            network_hashrate_estimate: "1000",
+            dag_tips_count: 1,
           };
         }
         if (method === "kovanica_blockNumber") {
@@ -1269,7 +1274,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: 10,
             localTipRound: 10,
             peerCount: 3,
-            networkTag: "5-hybrid",
+            networkTag: "2-hybrid",
           };
         }
 
@@ -1407,7 +1412,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: 5,
             localTipRound: 5,
             peerCount: 2,
-            networkTag: "5-testnet",
+            networkTag: "2-testnet",
           };
         }
         if (method === "kovanica_blockNumber") {
@@ -1506,7 +1511,7 @@ describe("Browser RPC Acceptance & Diagnostics UI (Headless Chromium)", { timeou
             committedHeight: 20,
             localTipRound: 20,
             peerCount: 3,
-            networkTag: "5-hybrid",
+            networkTag: "2-hybrid",
           };
         }
         if (method === "kovanica_blockNumber") {

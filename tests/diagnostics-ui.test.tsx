@@ -155,7 +155,7 @@ describe("Playground Node Diagnostics UI Regressions", () => {
           peerCount: 8,
           catchingUp: true,
           behindBy: "350",
-          networkTag: "5-d41d8cd98f00b204",
+          networkTag: "2-d41d8cd98f00b204",
         };
       }
       if (method === "kovanica_getMiningInfo") {
@@ -257,7 +257,7 @@ describe("Playground Node Diagnostics UI Regressions", () => {
         }
         if (method === "kovanica_getMiningInfo") {
           return {
-            chain_id: 5,
+            chain_id: 2,
             target_block_time_ms: 4000,
             ghostdag_k: 5,
             target_bits: "0x1e0ffff0",
@@ -693,7 +693,7 @@ describe("Playground Node Diagnostics UI Regressions", () => {
       expect(screen.getByTestId("sync-status-badge").textContent).toBe("Synced");
     });
 
-    // Start slow execution on Hybrid Testnet (Chain 5)
+    // Start slow execution on Testnet (Chain 2)
     fireEvent.click(screen.getByRole("button", { name: "Execute Call" }));
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDefined();
 

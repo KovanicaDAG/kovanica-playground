@@ -130,7 +130,7 @@ export default function App() {
 
       setSyncStatus(sync);
 
-      // Probe miningInfo (Chain 5 Hybrid PoW)
+      // Probe miningInfo (Hybrid PoW: Chains 1 & 2)
       try {
         const mining = await client.getMiningInfo({
           timeoutMs: 3000,
@@ -145,7 +145,7 @@ export default function App() {
         if (currentSequence !== probeSequenceRef.current) return;
 
         setMiningInfo(null);
-        // If sync has network tag (e.g. "5-xxx"), parse chain ID from it
+        // If sync has network tag (e.g. "2-xxx"), parse chain ID from it
         if (sync.networkTag) {
           const cid = Number.parseInt(sync.networkTag.split("-")[0], 10);
           if (!Number.isNaN(cid)) {
@@ -869,10 +869,16 @@ export default function App() {
               <div className="flex items-center justify-between border-b border-border pb-3">
                 <div>
                   <h2 className="text-sm font-semibold text-fg">Hybrid PoW & DAG Info</h2>
-                  <p className="text-[11px] text-muted">Chain 2 testnet metrics (ADR 0003)</p>
+                  <p className="text-[11px] text-muted">
+                    {(miningInfo?.chain_id ?? selectedChainId) === CHAIN_IDS.MAINNET
+                      ? "Mainnet metrics (Hybrid PoW + GHOSTDAG)"
+                      : "Chain 2 testnet metrics (ADR 0003)"}
+                  </p>
                 </div>
                 <span className="px-2 py-0.5 text-[10px] font-medium rounded bg-gold/10 text-gold border border-gold/20">
-                  Chain 2
+                  {(miningInfo?.chain_id ?? selectedChainId) === CHAIN_IDS.MAINNET
+                    ? "Chain 1"
+                    : "Chain 2"}
                 </span>
               </div>
 
@@ -926,9 +932,9 @@ export default function App() {
                 </div>
               ) : (
                 <div className="bg-surface-2/60 p-4 rounded-lg border border-border/60 text-xs text-muted text-center">
-                  <p>PoW Mining info is available on Chain 2 (Hybrid PoW testnet).</p>
+                  <p>PoW Mining info is available on Hybrid PoW + GHOSTDAG networks: Mainnet (Chain 1) and Testnet (Chain 2).</p>
                   <p className="mt-1 text-[11px] text-subtle">
-                    Mainnet (Chain 1) and Devnet (Chain 3) parameter profiles.
+                    Devnet (Chain 3) and Local Devnet (Chain 1337) use development parameter profiles.
                   </p>
                 </div>
               )}
